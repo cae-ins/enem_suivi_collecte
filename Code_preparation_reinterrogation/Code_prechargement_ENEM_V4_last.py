@@ -1,5 +1,12 @@
 # -*- coding: utf-8 -*-
 """
+Created on Wed Jan  7 11:30:14 2026
+
+@author: mg.kouame
+"""
+
+# -*- coding: utf-8 -*-
+"""
 Created on Fri Jan  2 15:13:11 2026
 
 @author: mg.kouame
@@ -541,6 +548,7 @@ if nb_labels_ajoutes > 0:
 else:
     print(f"   ⚠️  Aucune variable de label n'a pu être créée")
 
+"""
 # ==============================================================================
 # 📅 AJOUT DE LA VARIABLE DateJ7 ET DÉTERMINATION DE LA SEMAINE + DATES
 # ==============================================================================
@@ -623,6 +631,119 @@ if 'DateJ7' in Menage.columns:
                 nb_dates_non_trouvees += 1
     
     print(f"   ✓ Dates mises à jour (Date1, Date2) : {nb_dates_mises_a_jour} ménages")
+    
+    if nb_dates_non_trouvees > 0:
+        print(f"   ⚠️  ATTENTION : {nb_dates_non_trouvees} ménages sans dates")
+        print(f"      Vérifiez que le fichier Semaine_ref.xlsx contient bien toutes les semaines pour {TRIMESTRE_ACTUEL}")
+    
+    # Afficher un échantillon des dates mises à jour
+    print(f"\n   Échantillon des dates attribuées (2 premiers ménages) :")
+    echantillon = Menage[['interview__key', 'cohorte_origine', 'Semaine_ref', 'Date1', 'Date2']].head(2)
+    for idx, row in echantillon.iterrows():
+        if pd.notna(row['Semaine_ref']):
+            print(f"      {row['interview__key'][:15]}... | Cohorte: {row['cohorte_origine']} | {row['Semaine_ref']} | Dates {TRIMESTRE_ACTUEL}: {row['Date1']} → {row['Date2']}")
+    
+else:
+    print(f"⚠️  ATTENTION : Variable 'DateJ7' non trouvée dans les données ménage")
+    print(f"   Les variables 'Semaine_ref', 'Date1' et 'Date2' ne pourront pas être créées")
+    Menage['V1DateJ7'] = None
+    Menage['Semaine_ref'] = None
+    Menage['Date1'] = None
+    Menage['Date2'] = None
+
+"""
+
+# ==============================================================================
+# 📅 AJOUT DE LA VARIABLE DateJ7 ET DÉTERMINATION DE LA SEMAINE + DATES
+# ==============================================================================
+
+print("\n📅 Détermination de la semaine de référence et mise à jour des dates...")
+
+# Vérifier si la variable DateJ7 existe dans la base ménage
+if 'DateJ7' in Menage.columns:
+    # Précharger DateJ7 du Passage 1
+    Menage['V1DateJ7'] = Menage['DateJ7']
+    print(f"✓ Variable V1DateJ7 créée (DateJ7 du Passage 1)")
+    
+    # Initialiser les colonnes
+    Menage['Semaine_ref'] = None
+    
+    # ÉTAPE 1 : Déterminer la semaine de référence pour chaque ménage
+    # (basé sur la cohorte d'origine et DateJ7)
+    nb_semaines_trouvees = 0
+    nb_semaines_non_trouvees = 0
+    
+    print(f"\n   Étape 1 : Détermination des semaines de référence...")
+    
+    for idx, row in Menage.iterrows():
+        cohorte_origine = row['cohorte_origine']
+        datej7_menage = row['DateJ7']
+        
+        # Chercher la correspondance dans le fichier de référence
+        correspondance = df_semaine_ref[
+            (df_semaine_ref['Trimestre'] == cohorte_origine) &
+            (df_semaine_ref['DateJ7'] == datej7_menage)
+        ]
+        
+        if len(correspondance) > 0:
+            semaine_ref = correspondance.iloc[0]['Numero_semaine']
+            Menage.at[idx, 'Semaine_ref'] = semaine_ref
+            nb_semaines_trouvees += 1
+        else:
+            nb_semaines_non_trouvees += 1
+    
+    print(f"   ✓ Semaines déterminées : {nb_semaines_trouvees} / {len(Menage)} ménages")
+    
+    if nb_semaines_non_trouvees > 0:
+        print(f"   ⚠️  ATTENTION : {nb_semaines_non_trouvees} ménages sans correspondance")
+    
+    # Afficher la répartition par semaine
+    print(f"\n   Répartition des ménages par semaine :")
+    repartition_semaines = Menage['Semaine_ref'].value_counts().sort_index()
+    for semaine, nb in repartition_semaines.items():
+        if pd.notna(semaine):
+            print(f"      • {semaine} : {nb} ménages")
+    
+    # ÉTAPE 2 : Attribuer les dates Date1 et Date2 du TRIMESTRE ACTUEL
+    # (basé sur le trimestre de réinterrogation et la semaine de référence)
+    print(f"\n   Étape 2 : Attribution des dates du trimestre actuel ({TRIMESTRE_ACTUEL})...")
+    
+    Menage['Date1'] = None
+    Menage['Date2'] = None
+    
+    nb_dates_mises_a_jour = 0
+    nb_dates_non_trouvees = 0
+    
+    for idx, row in Menage.iterrows():
+        semaine_ref = row['Semaine_ref']
+        
+        if pd.notna(semaine_ref):
+            # Chercher les dates dans le fichier de référence pour le TRIMESTRE ACTUEL
+            correspondance_dates = df_semaine_ref[
+                (df_semaine_ref['Trimestre'] == TRIMESTRE_ACTUEL) &
+                (df_semaine_ref['Numero_semaine'] == semaine_ref)
+            ]
+            
+            if len(correspondance_dates) > 0:
+                date1_ref = correspondance_dates.iloc[0]['Date1']
+                date2_ref = correspondance_dates.iloc[0]['Date2']
+                
+                # 🔧 CONVERSION DU FORMAT : Remplacer "/" par "-"
+                # Convertir en string si ce n'est pas déjà le cas
+                if pd.notna(date1_ref):
+                    date1_ref_str = str(date1_ref).replace('/', '-')
+                    Menage.at[idx, 'Date1'] = date1_ref_str
+                
+                if pd.notna(date2_ref):
+                    date2_ref_str = str(date2_ref).replace('/', '-')
+                    Menage.at[idx, 'Date2'] = date2_ref_str
+                
+                nb_dates_mises_a_jour += 1
+            else:
+                nb_dates_non_trouvees += 1
+    
+    print(f"   ✓ Dates mises à jour (Date1, Date2) : {nb_dates_mises_a_jour} ménages")
+    print(f"   ✓ Format converti : XX/XX/XXXX → XX-XX-XXXX")
     
     if nb_dates_non_trouvees > 0:
         print(f"   ⚠️  ATTENTION : {nb_dates_non_trouvees} ménages sans dates")
@@ -741,7 +862,7 @@ print("\n📋 Création du fichier ménage...")
 colonnes_menage = [
     
     # Variables de labels géographiques
-    'HH1_label', 'HH2_label', 'HH3_label', 'HH4_label', 'Semaine_ref', 'Reference',
+    'HH1_label', 'HH2_label', 'HH3_label', 'HH4_label', 'Semaine_ref',
     
     # Identifiants et métadonnées Survey Solutions 
     'interview__id','Cohorte','ord_sem','HH01','HH0','HH2A','HH1','HH2','HH3','HH4','HH6','HH8',
@@ -792,6 +913,7 @@ MenageVF.to_csv(fichier_menage_csv, index=False)
 print(f"✓ Fichier ménage créé : {len(MenageVF)} ménages")
 print(f"   Excel : {fichier_menage_xlsx}")
 print(f"   CSV   : {fichier_menage_csv}")
+
 
 # ==============================================================================
 # 👥 PRÉPARATION DU FICHIER MEMBRES
@@ -970,21 +1092,6 @@ else:
 
 print(f"\n   📊 Total final : {len(MembresVF)} individus retenus")
 
-"""
-# ==============================================================================
-# 🔄 RENOMMAGE DE cohorte_origine EN Cohorte1 DANS MembresVF
-# ==============================================================================
-
-print("\n🔄 Renommage de cohorte_origine en Cohorte1 dans MembresVF...")
-
-if 'cohorte_origine' in MembresVF.columns:
-    MembresVF.rename(columns={'cohorte_origine': 'Cohorte1'}, inplace=True)
-    print(f"   ✓ Variable cohorte_origine renommée en Cohorte1")
-    print(f"   ✓ Valeurs : {MembresVF['Cohorte1'].unique()}")
-else:
-    print(f"   ⚠️  ATTENTION : Variable cohorte_origine non trouvée dans MembresVF")
-    print(f"   ⚠️  Impossible de renommer en Cohorte1")
-"""
 
 # ==============================================================================
 # 🔄 RENOMMAGE DE cohorte_origine EN Cohorte1 DANS MembresVF
@@ -1107,6 +1214,18 @@ for cohorte, nb in stats_cohortes_menage.items():
 print(f"\n📁 Fichiers générés dans : {DOSSIER_SORTIE}")
 print(f"   ✓ QX_EEC_VF.xlsx / .csv (ménages)")
 print(f"   ✓ membres.xlsx / .csv (individus)")
+
+print(f"\n📁 A RETENIR POUR L'ENVOIE DES FICHIERS générés dans : {DOSSIER_SORTIE}")
+print(f"   ✓ QX_EEC_VF.xlsx / Ne pas oublier de mettre les bons comptes des agents téléopérateurs")
+print(f"   ✓ QX_EEC_VF.xlsx / dans la variable _responsible")
+print(f"   ✓ QX_EEC_VF.xlsx / Retenir que les variables allant de interview__id à _quantity")
+print(f"   ✓ QX_EEC_VF.xlsx / Enregistrer sous le format : Texte (séparateur : tabulation) (*.txt)")
+
+print(f"   ✓ membres.xlsx / Retenir que les individus de membres qui sont dans QX_EEC_VF en fesant une interview__id")
+print(f"   ✓ membres.xlsx / en fesant une rechercheV avec interview__id")
+print(f"   ✓ membres.xlsx / Retenir que les variables allant de membres__id à interview__id")
+print(f"   ✓ membres.xlsx / Enregistrer sous le format : Texte (séparateur : tabulation) (*.txt)")
+
 
 print("\n" + "=" * 70)
 print("✅ PROGRAMME TERMINÉ")
