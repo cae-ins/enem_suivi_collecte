@@ -1,20 +1,16 @@
 # -*- coding: utf-8 -*-
 """
-Created on Wed Jan  7 11:30:14 2026
-
-@author: mg.kouame
-"""
-
-# -*- coding: utf-8 -*-
-"""
 Created on Fri Jan  2 15:13:11 2026
 
 @author: mg.kouame
 """
 
 # -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """
+================================================================================
 PROGRAMME : Préparation des fichiers de réinterrogation (Passage 2)
+================================================================================
 OBJECTIF  : Préparer les fichiers Excel pour la réinterrogation téléphonique
             des ménages enquêtés au Passage 1, avec préchargement de certaines
             réponses pour faciliter la collecte au Passage 2.
@@ -25,8 +21,9 @@ CONTEXTE  : Enquête trimestrielle sur l'emploi - Gestion multi-cohortes
             - Chaque trimestre réinterroge 3 cohortes précédentes
             
 AUTEUR    : mg.kouame
-DATE      : 22 décembre 2025
-VERSION   : 2.1 - Gestion automatique des rangs d'interrogation par cohorte
+DATE      : 06 janvier 2026
+VERSION   : 2.2 - Ajout variables ord_sem et HH01 + Renommage Cohorte1
+================================================================================
 """
 
 import pandas as pd
@@ -39,29 +36,28 @@ from datetime import datetime
 # ==============================================================================
 
 # ===== TRIMESTRE EN COURS DE COLLECTE =====
-TRIMESTRE_ACTUEL = "T4_2025"  # Format: T1_2025, T2_2025, T3_2025, T4_2025, etc.
-ANNEE_ACTUELLE = 2025
-TRIMESTRE_NUMERO = 4  # 1, 2, 3 ou 4
-MOIS_EN_COURS = 10    # Mois du début du trimestre (ex: T4 = octobre = 10)
+TRIMESTRE_ACTUEL = "T1_2026"  # Format: T1_2025, T2_2025, T3_2025, T4_2025, etc.
+ANNEE_ACTUELLE = 2026
+TRIMESTRE_NUMERO = 1  # 1, 2, 3 ou 4
+MOIS_EN_COURS = 1    # Mois du début du trimestre (ex: T4 = octobre = 10)
 
 # ===== COHORTES À RÉINTERROGER =====
 # Liste des trimestres qui doivent être réinterrogés
 # Exemple pour T4_2025 : on réinterroge T3_2024, T4_2024 et T3_2025
 COHORTES_REINTERROGATION = [
-    "T3_2024",  # Cohorte 1 (il y a 1 an)
+    "T1_2025",  # Cohorte 1 (il y a 1 an)
     "T4_2024",  # Cohorte 2 (il y a 2 trimestres)
-    "T3_2025"   # Cohorte 3 (trimestre précédent)
+    "T4_2025"   # Cohorte 3 (trimestre précédent)
 ]
 
 # ===== CONFIGURATION DES RANGS D'INTERROGATION PAR COHORTE =====
 # Dictionnaire définissant les rangs pour chaque cohorte
 # Format: {cohorte: {'rgmen': valeur, 'rghab': valeur, 'rang_ind': valeur}}
 RANGS_PAR_COHORTE = {
-    "T3_2024": {"rgmen": 4, "rghab": 4, "rang_ind": 4},  # 4ème interrogation
-    "T4_2024": {"rgmen": 3, "rghab": 3, "rang_ind": 3},  # 3ème interrogation
-    "T3_2025": {"rgmen": 2, "rghab": 2, "rang_ind": 2}   # 2ème interrogation
+    "T1_2025": {"rgmen": 3, "rghab": 3, "rang_ind": 3},  # 3ème interrogation
+    "T4_2024": {"rgmen": 4, "rghab": 4, "rang_ind": 4},  # 4ème interrogation
+    "T4_2025": {"rgmen": 2, "rghab": 2, "rang_ind": 2}   # 2ème interrogation
 }
-
 
 # ===== CHEMINS DES DOSSIERS =====
 # Dossier racine contenant tous les sous-dossiers des trimestres
@@ -987,7 +983,6 @@ else:
     print(f"      Tous les individus sont conservés (pas de filtrage par statut de résidence)")
 
 print(f"\n   📊 Total final : {len(MembresVF)} individus retenus")
-
 
 # ==============================================================================
 # 🔄 RENOMMAGE DE cohorte_origine EN Cohorte1 DANS MembresVF
