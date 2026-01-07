@@ -23,6 +23,7 @@ VERSION   : 2.1 - Gestion automatique des rangs d'interrogation par cohorte
 """
 
 import pandas as pd
+import numpy as np
 import os
 from datetime import datetime
 
@@ -53,6 +54,7 @@ RANGS_PAR_COHORTE = {
     "T4_2024": {"rgmen": 3, "rghab": 3, "rang_ind": 3},  # 3ème interrogation
     "T3_2025": {"rgmen": 2, "rghab": 2, "rang_ind": 2}   # 2ème interrogation
 }
+
 
 # ===== CHEMINS DES DOSSIERS =====
 # Dossier racine contenant tous les sous-dossiers des trimestres
@@ -478,10 +480,6 @@ Menage['V1HH10_1_1a'] = Menage['HH10_1_1a']        # Précision type logement
 Menage['V1HH10_2_1'] = Menage['HH10_2_1']          # Précision statut occupation
 Menage['V1HH13B'] = Menage['HH13B']                # Superviseur
 
-# Variables initiales du ménage
-Menage['HH01'] = ""     # Numéro d'ordre semaine
-Menage['ord_sem'] = ""  # Ordre dans la semaine
-
 print(f"✓ Variables préchargées")
 
 # ==============================================================================
@@ -644,6 +642,94 @@ else:
     Menage['Semaine_ref'] = None
     Menage['Date1'] = None
     Menage['Date2'] = None
+
+
+# ==============================================================================
+# 🔢 CRÉATION DES VARIABLES ord_sem ET HH01
+# ==============================================================================
+
+print("\n🔢 Création des variables ord_sem et HH01...")
+
+# Vérifier que Semaine_ref existe avant de créer ord_sem et HH01
+if 'Semaine_ref' not in Menage.columns or Menage['Semaine_ref'].isna().all():
+    print(f"   ⚠️  ATTENTION : Semaine_ref non disponible")
+    print(f"   ⚠️  Les variables ord_sem et HH01 ne pourront pas être créées correctement")
+    Menage['ord_sem'] = ""
+    Menage['HH01'] = ""
+else:
+    # Générer une variable aléatoire de 8 chiffres UNIQUE par interview__key
+    np.random.seed(42)  # Pour la reproductibilité (retirer pour du vrai aléatoire)
+    
+    # Obtenir les interview__key uniques
+    interview_keys_uniques = Menage['interview__key'].unique()
+    
+    # Créer un dictionnaire de correspondance : interview__key → code aléatoire 8 chiffres
+    dict_code_aleatoire = {}
+    for key in interview_keys_uniques:
+        # Générer un nombre aléatoire entre 10000000 et 99999999 (8 chiffres)
+        code_aleatoire = np.random.randint(10000000, 100000000)
+        dict_code_aleatoire[key] = code_aleatoire
+    
+    # Appliquer le mapping pour créer la variable aléatoire
+    Menage['Variable_aleatoire'] = Menage['interview__key'].map(dict_code_aleatoire)
+    
+    print(f"   ✓ Variable aléatoire de 8 chiffres créée pour {len(dict_code_aleatoire)} ménages uniques")
+    if len(dict_code_aleatoire) > 0:
+        print(f"   ✓ Exemple : interview__key {list(dict_code_aleatoire.keys())[0][:15]}... → {list(dict_code_aleatoire.values())[0]}")
+    
+    # 1. CONSTRUCTION DE ord_sem
+    # Format : "Tele_" + Semaine_ref + "_" + TRIMESTRE_ACTUEL + "_" + Variable_aleatoire
+    Menage['ord_sem'] = (
+        "Tele_" + 
+        Menage['Semaine_ref'].astype(str) + 
+        f"_{TRIMESTRE_ACTUEL}_" + 
+        Menage['Variable_aleatoire'].astype(str)
+    )
+    
+    print(f"   ✓ Variable ord_sem créée")
+    if len(Menage) > 0 and pd.notna(Menage['ord_sem'].iloc[0]):
+        print(f"   ✓ Exemple : {Menage['ord_sem'].iloc[0]}")
+    
+    # 2. CONSTRUCTION DE HH01
+    # Format : HH8A + HH8 + "_" + Semaine_ref + "_" + TRIMESTRE_ACTUEL + "_" + Variable_aleatoire
+    Menage['HH01'] = (
+        Menage['HH8A'].astype(str) + 
+        "_" +
+        Menage['HH8'].astype(str) + 
+        "_" + 
+        Menage['Semaine_ref'].astype(str) + 
+        f"_{TRIMESTRE_ACTUEL}_" + 
+        Menage['Variable_aleatoire'].astype(str)
+    )
+    
+    print(f"   ✓ Variable HH01 créée")
+    if len(Menage) > 0 and pd.notna(Menage['HH01'].iloc[0]):
+        print(f"   ✓ Exemple : {Menage['HH01'].iloc[0]}")
+    
+    # Afficher un échantillon des résultats
+    print(f"\n   📋 Échantillon des variables créées (2 premiers ménages) :")
+    colonnes_echantillon = ['interview__key', 'Semaine_ref', 'Variable_aleatoire', 'ord_sem', 'HH01']
+    # Vérifier que toutes les colonnes existent
+    colonnes_disponibles = [col for col in colonnes_echantillon if col in Menage.columns]
+    if len(colonnes_disponibles) > 0:
+        echantillon = Menage[colonnes_disponibles].head(2)
+        for idx, row in echantillon.iterrows():
+            print(f"      Ménage {row['interview__key'][:15]}...")
+            if 'Semaine_ref' in row:
+                print(f"         Semaine_ref      : {row['Semaine_ref']}")
+            if 'Variable_aleatoire' in row:
+                print(f"         Code aléatoire   : {row['Variable_aleatoire']}")
+            if 'ord_sem' in row:
+                print(f"         ord_sem          : {row['ord_sem']}")
+            if 'HH01' in row:
+                print(f"         HH01             : {row['HH01']}")
+            print()
+    
+    # Supprimer la variable temporaire Variable_aleatoire (optionnel)
+    Menage.drop(columns=['Variable_aleatoire'], inplace=True)
+    
+    print(f"✓ Variables ord_sem et HH01 créées avec succès !")
+
 
 # ==============================================================================
 # 📋 CRÉATION DU FICHIER MÉNAGE FINAL
@@ -827,7 +913,7 @@ for idx, row in echantillon.iterrows():
 # Variables de suivi longitudinal des individus
 MembresVF['membre_id_v1'] = MembresVF['membres__id']
 MembresVF['rangind_1er'] = MembresVF['membres__id']
-MembresVF['membre_id_v1_IND'] = "AAA"
+MembresVF['membre_id_v1_IND'] = MembresVF['membre_id_v1_IND']
 
 # Préchargement des variables individuelles du Passage 1
 variables_precharge = {
@@ -884,6 +970,42 @@ else:
 
 print(f"\n   📊 Total final : {len(MembresVF)} individus retenus")
 
+"""
+# ==============================================================================
+# 🔄 RENOMMAGE DE cohorte_origine EN Cohorte1 DANS MembresVF
+# ==============================================================================
+
+print("\n🔄 Renommage de cohorte_origine en Cohorte1 dans MembresVF...")
+
+if 'cohorte_origine' in MembresVF.columns:
+    MembresVF.rename(columns={'cohorte_origine': 'Cohorte1'}, inplace=True)
+    print(f"   ✓ Variable cohorte_origine renommée en Cohorte1")
+    print(f"   ✓ Valeurs : {MembresVF['Cohorte1'].unique()}")
+else:
+    print(f"   ⚠️  ATTENTION : Variable cohorte_origine non trouvée dans MembresVF")
+    print(f"   ⚠️  Impossible de renommer en Cohorte1")
+"""
+
+# ==============================================================================
+# 🔄 RENOMMAGE DE cohorte_origine EN Cohorte1 DANS MembresVF
+# ==============================================================================
+
+print("\n🔄 Renommage de cohorte_origine en Cohorte1 dans MembresVF...")
+
+# 1. Supprimer d'abord toute colonne Cohorte1 existante (vide)
+if 'Cohorte1' in MembresVF.columns:
+    MembresVF = MembresVF.drop(columns=['Cohorte1'])
+    print(f"   ✓ Ancienne colonne Cohorte1 (vide) supprimée")
+
+# 2. Renommer cohorte_origine en Cohorte1
+if 'cohorte_origine' in MembresVF.columns:
+    MembresVF.rename(columns={'cohorte_origine': 'Cohorte1'}, inplace=True)
+    print(f"   ✓ Variable cohorte_origine renommée en Cohorte1")
+    print(f"   ✓ Nombre de valeurs non-nulles : {MembresVF['Cohorte1'].notna().sum()}")
+else:
+    print(f"   ⚠️  ATTENTION : Variable cohorte_origine non trouvée dans MembresVF")
+    print(f"   ⚠️  Impossible de renommer en Cohorte1")
+    
 # ==============================================================================
 # 📊 SÉLECTION DES COLONNES FINALES
 # ==============================================================================
@@ -892,7 +1014,7 @@ print("\n📊 Sélection des colonnes finales...")
 
 colonnes_membres = [
     # Identifiants
-    'membres__id', 'M0', 'cohorte_origine',
+    'membres__id', 'M0', 'Cohorte1',
     
     # ✨ Variables de suivi longitudinal (AVEC RANGS)
     'membre_id_v1', 'rangind_1er', 'rang_last_trim', 'cle_individu', 'rang_ind',
