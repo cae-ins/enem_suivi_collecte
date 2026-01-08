@@ -497,7 +497,7 @@ def main():
     print("="*50)
     
     # Chemin du fichier source
-    fichier_source = r"D:\ENEM_Working\Apurement salaire\Doosier_travail_Elodie\Fichier_Gant.xlsx"
+    fichier_source = r"D:\ENEM_Working\Apurement salaire\Dossier_travail_Elodie\Fichier_Gant.xlsx"
     
     # Créer l'instance du générateur
     generateur = GanttGenerator(fichier_source)
