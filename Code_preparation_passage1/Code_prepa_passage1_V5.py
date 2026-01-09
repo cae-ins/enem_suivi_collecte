@@ -1,3 +1,10 @@
+# -*- coding: utf-8 -*-
+"""
+Created on Fri Jan  9 21:55:15 2026
+
+@author: mg.kouame
+"""
+
 """
 ================================================================================
 PROGRAMME : Préparation des fichiers de collecte terrain (Passage 1)
@@ -16,11 +23,17 @@ PROCESSUS :
     2. Fusionner avec les données de géoréférencement
     3. Affecter automatiquement les agents de collecte par région
     4. Générer le fichier Dénombrement (1 ligne par ZD)
-    5. Générer le fichier Ménage (6 ménages par ZD)
+    5. Générer le fichier Ménage avec variable Reference (duplication pour hors-ABIDJAN)
+    6. Créer les fichiers séparés ABIDJAN / HORS-ABIDJAN
+
+MODIFICATIONS :
+    - Ajout de la variable Reference dans le fichier Ménage
+    - Duplication des lignes NON-ABIDJAN (Reference = 1 et 2)
+    - Génération de 6 fichiers : Menage, Denombrement (complet, ABIDJAN, HORS-ABIDJAN)
 
 AUTEUR    : KOUAME KOUASSI GUY MARTIAL 
 DATE      : 26 décembre 2025
-VERSION   : 1.0 - Version nettoyée et documentée
+VERSION   : 2.0 - Ajout variable Reference et fichiers séparés
 ================================================================================
 """
 
@@ -50,7 +63,16 @@ DOSSIER_TRAVAIL = r"D:\ENEM_Working\Base_prechargement_ENEM\Code_prepa_passage1"
 
 DOSSIER_TRAVAIL_RESULTAT = r"D:\ENEM_Working\Base_prechargement_ENEM\Code_prepa_passage1\Resutat"
 
-FICHIER_ECHANTILLON = r"D:\ENEM_Working\Base_prechargement_ENEM\Code_prepa_passage1\Echantillon_ZD_VF.xlsx"
+# Il y a quelque temps qu'une zone de dénombrement avait été enquêtée par anticipation en 2024 (ZD 4091),
+# alors qu'elle était initialement programmée pour 2025.
+# Dans le cadre du respect du chronogramme actuel, les agents appelés à enquêter la ZD 4091 seront 
+# donc amenés à prendre en charge la ZD 4085.
+# Lors de la collecte du T4-2025, les agents du GBOKLE n'ont pas visité la 7ieme ZD , 
+# GRIHIRI	 KOUATE KAFANDO YEMBI	6027, sauf que dans le fichier original Echantillon_ZD_VF_ACTUALISEE
+# la ZD est situé à la 6ième ZD i.e semaine_ref==11 et sous_echant==7. 
+# Mais nous l'avons positioné en 7ieme ZD pour le T1-2026 i.e semaine_ref==13 et sous_echant==8
+# Nous avons fait cette modification dans le fichier Echantillon_ZD_VF_ACTUALISEE
+FICHIER_ECHANTILLON = r"D:\ENEM_Working\Base_prechargement_ENEM\Code_prepa_passage1\Echantillon_ZD_VF_ACTUALISEE.xlsx"
 FEUILLE_ECHANTILLON = "BASEGLO"          # Nom de la feuille Excel (ou None pour la feuille par défaut)
 
 FICHIER_GEOREF = r"D:\ENEM_Working\Base_prechargement_ENEM\Code_prepa_passage1\VF_BASE_ILOT_12012024_VF_work_Geovf.xlsx"
@@ -64,6 +86,10 @@ FEUILLE_SEMAINES_REF = "Semaine_ref_trim"
 # --- NOMS DES FICHIERS DE SORTIE ---
 NOM_FICHIER_DENOMBREMENT = f"Denombrement_{TRIMESTRE_COLLECTE}.xlsx"
 NOM_FICHIER_MENAGE = f"Menage_{TRIMESTRE_COLLECTE}.xlsx"
+NOM_FICHIER_MENAGE_ABIDJAN = f"Menage_ABIDJAN_{TRIMESTRE_COLLECTE}.xlsx"
+NOM_FICHIER_MENAGE_HORS_ABIDJAN = f"Menage_HORS_ABIDJAN_{TRIMESTRE_COLLECTE}.xlsx"
+NOM_FICHIER_DENOMBREMENT_ABIDJAN = f"Denombrement_ABIDJAN_{TRIMESTRE_COLLECTE}.xlsx"
+NOM_FICHIER_DENOMBREMENT_HORS_ABIDJAN = f"Denombrement_HORS_ABIDJAN_{TRIMESTRE_COLLECTE}.xlsx"
 
 # ============================================================================
 # AFFICHAGE DES PARAMÈTRES
@@ -412,7 +438,6 @@ denombrement['trimestreencours'] = NUMERO_TRIMESTRE
 denombrement['mois_en_cours'] = MOIS_COLLECTE
 denombrement['annee'] = ANNEE_COLLECTE
 denombrement['Date1'] = df_resultat['Date1_ref']  # Dates de début de semaine de référence
-denombrement['Date2'] = df_resultat['Date2_ref']  # Dates de fin de semaine de référence
 
 # Informations d'affectation
 denombrement['Code1'] = df_resultat['Code1']
@@ -421,11 +446,25 @@ denombrement['_quantity'] = 1  # 1 dénombrement par ZD
 denombrement['Ordre'] = df_resultat['Ordre']
 denombrement['cle'] = df_resultat['NumeroSp'].astype(str) + df_resultat['NUM_ZD_Vf'].astype(str)
 
-# Sauvegarder le fichier
+# Sauvegarder le fichier complet
 fichier_sortie_denom = DOSSIER_TRAVAIL_RESULTAT + "\\" + NOM_FICHIER_DENOMBREMENT
 denombrement.to_excel(fichier_sortie_denom, index=False)
 print(f"   ✓ Fichier créé : {NOM_FICHIER_DENOMBREMENT}")
 print(f"   ✓ Nombre de lignes : {len(denombrement)}")
+
+# Séparer ABIDJAN et HORS-ABIDJAN
+denombrement_abidjan = denombrement[denombrement['Region'] == 'ABIDJAN'].copy()
+denombrement_hors_abidjan = denombrement[denombrement['Region'] != 'ABIDJAN'].copy()
+
+# Sauvegarder les fichiers séparés
+fichier_denom_abidjan = DOSSIER_TRAVAIL_RESULTAT + "\\" + NOM_FICHIER_DENOMBREMENT_ABIDJAN
+fichier_denom_hors_abidjan = DOSSIER_TRAVAIL_RESULTAT + "\\" + NOM_FICHIER_DENOMBREMENT_HORS_ABIDJAN
+
+denombrement_abidjan.to_excel(fichier_denom_abidjan, index=False)
+denombrement_hors_abidjan.to_excel(fichier_denom_hors_abidjan, index=False)
+
+print(f"   ✓ Fichier ABIDJAN créé : {NOM_FICHIER_DENOMBREMENT_ABIDJAN} ({len(denombrement_abidjan)} lignes)")
+print(f"   ✓ Fichier HORS-ABIDJAN créé : {NOM_FICHIER_DENOMBREMENT_HORS_ABIDJAN} ({len(denombrement_hors_abidjan)} lignes)")
 
 # ============================================================================
 # GÉNÉRATION DU FICHIER MÉNAGE (N lignes par ZD)
@@ -476,19 +515,165 @@ menage['mois_en_cours'] = MOIS_COLLECTE
 menage['annee'] = ANNEE_COLLECTE
 menage['Date1'] = df_resultat['Date1_ref']  # Dates de début de semaine de référence
 menage['Date2'] = df_resultat['Date2_ref']  # Dates de fin de semaine de référence
+
+# Variables restantes (avant Reference - on doit d'abord créer Ordre)
 menage['Code1'] = df_resultat['Code1'] 
 
 # Informations d'affectation
 menage['_responsible'] = df_resultat['login']  # Agent responsable
 menage['_quantity'] = NOMBRE_MENAGES_PAR_ZD  # Nombre de ménages à interroger par ZD
-menage['Ordre'] = df_resultat['Ordre']
-menage['cle'] = df_resultat['NumeroSp'].astype(str) + df_resultat['NUM_ZD_Vf'].astype(str) 
+menage['Ordre'] = df_resultat['Ordre']  # IMPORTANT : Créer Ordre AVANT Reference
+menage['cle'] = df_resultat['NumeroSp'].astype(str) + df_resultat['NUM_ZD_Vf'].astype(str)
 
-# Sauvegarder le fichier
+# ============================================================================
+# CRÉATION DE LA VARIABLE REFERENCE (NOUVELLE LOGIQUE)
+# ============================================================================
+
+print("\n🔢 CRÉATION DE LA VARIABLE REFERENCE...")
+
+# Créer la variable Reference basée sur la région
+# IMPORTANT : Ordre doit exister dans le DataFrame avant cette étape
+menage['Reference'] = menage.apply(
+    lambda row: row['Ordre'] if row['Region'] == 'ABIDJAN' else 1, 
+    axis=1
+)
+
+print(f"   ✓ Variable Reference créée")
+print(f"      • Lignes ABIDJAN : Reference = Ordre")
+print(f"      • Lignes NON-ABIDJAN : Reference = 1 (avant duplication)")
+
+# Réorganiser les colonnes pour placer Reference entre Date2 et Code1
+# Liste des colonnes dans l'ordre souhaité
+colonnes_ordre = [
+    'Region', 'sp', 'Cohorte', 'ord_sem', 'HH01', 'HH0', 'HH2A',
+    'HH1', 'HH2', 'HH3', 'HH4', 'HH6', 'HH8', 'HH8A', 'HH7', 'HH7B', 'HH8B',
+    'rghab', 'rgmen', 'V1MODINTR',
+    'trimestreencours', 'mois_en_cours', 'annee', 'Date1', 'Date2',
+    'Reference',  # Placée entre Date2 et Code1
+    'Code1', '_responsible', '_quantity', 'Ordre', 'cle'
+]
+
+# Appliquer l'ordre des colonnes
+menage = menage[colonnes_ordre]
+
+# ============================================================================
+# DUPLICATION DES LIGNES NON-ABIDJAN AVEC REFERENCE=2
+# ============================================================================
+
+print("\n📋 DUPLICATION DES LIGNES NON-ABIDJAN...")
+
+# Séparer ABIDJAN et NON-ABIDJAN
+menage_abidjan = menage[menage['Region'] == 'ABIDJAN'].copy()
+menage_non_abidjan_ref1 = menage[menage['Region'] != 'ABIDJAN'].copy()
+
+print(f"   • Lignes ABIDJAN : {len(menage_abidjan)}")
+print(f"   • Lignes NON-ABIDJAN (Reference=1) : {len(menage_non_abidjan_ref1)}")
+
+# Créer la duplication avec Reference=2
+menage_non_abidjan_ref2 = menage_non_abidjan_ref1.copy()
+menage_non_abidjan_ref2['Reference'] = 2
+
+print(f"   • Lignes NON-ABIDJAN dupliquées (Reference=2) : {len(menage_non_abidjan_ref2)}")
+
+# ============================================================================
+# ASSEMBLAGE FINAL : OPTION B (Lignes Reference=1 et 2 côte à côte par ZD)
+# ============================================================================
+
+print("\n🔧 ASSEMBLAGE DES DONNÉES (Option B : lignes côte à côte par ZD)...")
+
+# Pour les lignes NON-ABIDJAN, créer une clé de tri pour les regrouper par ZD
+menage_non_abidjan_ref1['cle_tri'] = (
+    menage_non_abidjan_ref1['Region'].astype(str) + "_" +
+    menage_non_abidjan_ref1['sp'].astype(str) + "_" +
+    menage_non_abidjan_ref1['HH8'].astype(str)
+)
+menage_non_abidjan_ref2['cle_tri'] = (
+    menage_non_abidjan_ref2['Region'].astype(str) + "_" +
+    menage_non_abidjan_ref2['sp'].astype(str) + "_" +
+    menage_non_abidjan_ref2['HH8'].astype(str)
+)
+
+# Concaténer Reference=1 et Reference=2
+menage_non_abidjan_combine = pd.concat([
+    menage_non_abidjan_ref1, 
+    menage_non_abidjan_ref2
+], ignore_index=True)
+
+# Trier par clé de ZD puis par Reference (1 puis 2)
+menage_non_abidjan_combine = menage_non_abidjan_combine.sort_values(
+    by=['cle_tri', 'Reference']
+).drop(columns=['cle_tri'])
+
+# Combiner avec ABIDJAN
+menage_final = pd.concat([
+    menage_abidjan,
+    menage_non_abidjan_combine
+], ignore_index=True)
+
+print(f"   ✓ Assemblage terminé")
+print(f"      • Total ABIDJAN : {len(menage_abidjan)} lignes")
+print(f"      • Total NON-ABIDJAN : {len(menage_non_abidjan_combine)} lignes (incluant duplication)")
+print(f"      • TOTAL FINAL : {len(menage_final)} lignes")
+
+# ============================================================================
+# SAUVEGARDE DES FICHIERS MÉNAGE
+# ============================================================================
+
+print("\n💾 SAUVEGARDE DES FICHIERS MÉNAGE...")
+
+# Fichier complet
 fichier_sortie_menage = DOSSIER_TRAVAIL_RESULTAT + "\\" + NOM_FICHIER_MENAGE
-menage.to_excel(fichier_sortie_menage, index=False)
-print(f"   ✓ Fichier créé : {NOM_FICHIER_MENAGE}")
-print(f"   ✓ Nombre de lignes : {len(menage)}")
+menage_final.to_excel(fichier_sortie_menage, index=False)
+print(f"   ✓ Fichier complet créé : {NOM_FICHIER_MENAGE}")
+print(f"   ✓ Nombre de lignes : {len(menage_final)}")
+
+# Fichier ABIDJAN uniquement
+fichier_menage_abidjan = DOSSIER_TRAVAIL_RESULTAT + "\\" + NOM_FICHIER_MENAGE_ABIDJAN
+menage_abidjan.to_excel(fichier_menage_abidjan, index=False)
+print(f"   ✓ Fichier ABIDJAN créé : {NOM_FICHIER_MENAGE_ABIDJAN}")
+print(f"   ✓ Nombre de lignes : {len(menage_abidjan)}")
+
+# Fichier HORS-ABIDJAN (avec les 2 références)
+fichier_menage_hors_abidjan = DOSSIER_TRAVAIL_RESULTAT + "\\" + NOM_FICHIER_MENAGE_HORS_ABIDJAN
+menage_non_abidjan_combine.to_excel(fichier_menage_hors_abidjan, index=False)
+print(f"   ✓ Fichier HORS-ABIDJAN créé : {NOM_FICHIER_MENAGE_HORS_ABIDJAN}")
+print(f"   ✓ Nombre de lignes : {len(menage_non_abidjan_combine)}")
+
+# ============================================================================
+# STATISTIQUES DÉTAILLÉES SUR LA VARIABLE REFERENCE
+# ============================================================================
+
+print("\n📊 STATISTIQUES SUR LA VARIABLE REFERENCE...")
+
+stats_ref = menage_final.groupby(['Region', 'Reference']).size().reset_index(name='Nombre_lignes')
+
+# Afficher pour ABIDJAN
+print("\n   • ABIDJAN (Reference = Ordre) :")
+stats_abidjan = stats_ref[stats_ref['Region'] == 'ABIDJAN'].sort_values('Reference')
+for _, row in stats_abidjan.head(7).iterrows():
+    print(f"      - Reference {int(row['Reference'])}: {row['Nombre_lignes']} lignes")
+
+# Afficher pour quelques régions NON-ABIDJAN
+print("\n   • HORS-ABIDJAN (échantillon de régions) :")
+regions_hors_abidjan = menage_final[menage_final['Region'] != 'ABIDJAN']['Region'].unique()[:3]
+for region in regions_hors_abidjan:
+    stats_region = stats_ref[stats_ref['Region'] == region]
+    print(f"      {region}:")
+    for _, row in stats_region.iterrows():
+        print(f"        - Reference {int(row['Reference'])}: {row['Nombre_lignes']} lignes")
+
+# Vérification : Toutes les lignes NON-ABIDJAN doivent avoir Reference=1 et Reference=2
+verification = menage_final[menage_final['Region'] != 'ABIDJAN']['Reference'].value_counts().sort_index()
+print(f"\n   📌 Vérification NON-ABIDJAN :")
+for ref, count in verification.items():
+    print(f"      • Reference {int(ref)}: {count} lignes")
+
+nb_ref1 = verification.get(1, 0)
+nb_ref2 = verification.get(2, 0)
+if nb_ref1 == nb_ref2:
+    print(f"   ✅ Duplication correcte : {nb_ref1} lignes avec Reference=1 et {nb_ref2} avec Reference=2")
+else:
+    print(f"   ⚠️  ATTENTION : Déséquilibre entre Reference=1 ({nb_ref1}) et Reference=2 ({nb_ref2})")
 
 # ============================================================================
 # RÉSUMÉ FINAL
@@ -502,8 +687,19 @@ print(f"   • ZD traitées           : {len(df_echantillon)}")
 print(f"   • Affectations créées   : {len(df_resultat)}")
 print(f"   • Régions couvertes     : {df_resultat['Region'].nunique()}")
 print(f"   • Agents mobilisés      : {df_resultat['login'].nunique()}")
+
 print(f"\n📁 FICHIERS GÉNÉRÉS")
+print(f"\n   FICHIERS COMPLETS :")
 print(f"   • Dénombrement : {NOM_FICHIER_DENOMBREMENT} ({len(denombrement)} lignes)")
-print(f"   • Ménage       : {NOM_FICHIER_MENAGE} ({len(menage)} lignes)")
-print(f"\n📂 Localisation : {DOSSIER_TRAVAIL}")
+print(f"   • Ménage       : {NOM_FICHIER_MENAGE} ({len(menage_final)} lignes)")
+
+print(f"\n   FICHIERS ABIDJAN :")
+print(f"   • Dénombrement ABIDJAN : {NOM_FICHIER_DENOMBREMENT_ABIDJAN} ({len(denombrement_abidjan)} lignes)")
+print(f"   • Ménage ABIDJAN       : {NOM_FICHIER_MENAGE_ABIDJAN} ({len(menage_abidjan)} lignes)")
+
+print(f"\n   FICHIERS HORS-ABIDJAN :")
+print(f"   • Dénombrement HORS-ABIDJAN : {NOM_FICHIER_DENOMBREMENT_HORS_ABIDJAN} ({len(denombrement_hors_abidjan)} lignes)")
+print(f"   • Ménage HORS-ABIDJAN       : {NOM_FICHIER_MENAGE_HORS_ABIDJAN} ({len(menage_non_abidjan_combine)} lignes)")
+
+print(f"\n📂 Localisation : {DOSSIER_TRAVAIL_RESULTAT}")
 print("="*80)
