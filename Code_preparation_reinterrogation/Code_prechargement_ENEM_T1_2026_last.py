@@ -483,6 +483,7 @@ Menage['V1HH10_1_1a'] = Menage['HH10_1_1a']        # Précision type logement
 Menage['V1HH10_2_1'] = Menage['HH10_2_1']          # Précision statut occupation
 Menage['V1HH13B'] = Menage['HH13B']                # Superviseur
 
+
 print(f"✓ Variables préchargées")
 
 # ==============================================================================
@@ -929,6 +930,7 @@ MembresVF['membre_id_v1'] = MembresVF['membres__id']
 MembresVF['rangind_1er'] = MembresVF['membres__id']
 MembresVF['membre_id_v1_IND'] = MembresVF['membre_id_v1_IND']
 
+"""
 # Préchargement des variables individuelles du Passage 1
 variables_precharge = {
     'V1M4': 'M4',
@@ -945,7 +947,72 @@ for var_dest, var_source in variables_precharge.items():
     else:
         MembresVF[var_dest] = None
         print(f"   ⚠️  Variable {var_source} non trouvée pour créer {var_dest}")
+"""
+# ==============================================================================
+# 📅 PRÉCHARGEMENT DES VARIABLES INDIVIDUELLES DU PASSAGE 1 (AJOUT M6 ET M7)
+# ==============================================================================
 
+print("\n📅 Préchargement des variables de date de naissance et sexe...")
+
+# ✨ NOUVELLES VARIABLES : Date de naissance (M6_J, M6_M, M6_A) et Sexe (M7)
+variables_precharge_nouvelles = {
+    'V1M6_J': 'M6_J',   # Jour de naissance
+    'V1M6_M': 'M6_M',   # Mois de naissance
+    'V1M6_A': 'M6_A',   # Année de naissance
+    'V1M7': 'M7'        # Age individu
+}
+
+nb_variables_creees = 0
+
+for var_dest, var_source in variables_precharge_nouvelles.items():
+    if var_source in MembresVF.columns:
+        MembresVF[var_dest] = MembresVF[var_source]
+        nb_variables_creees += 1
+        print(f"   ✓ {var_dest} créée depuis {var_source}")
+    else:
+        MembresVF[var_dest] = None
+        print(f"   ⚠️  Variable {var_source} non trouvée pour créer {var_dest}")
+
+print(f"\n✓ {nb_variables_creees}/4 nouvelles variables créées (M6_J, M6_M, M6_A, M7)")
+
+# Afficher un échantillon
+if nb_variables_creees > 0:
+    print(f"\n   📋 Échantillon des nouvelles variables (2 premiers individus) :")
+    colonnes_echantillon = ['membres__id', 'V1M6_J', 'V1M6_M', 'V1M6_A', 'V1M7']
+    colonnes_disponibles = [col for col in colonnes_echantillon if col in MembresVF.columns]
+    
+    if len(colonnes_disponibles) > 1:
+        echantillon = MembresVF[colonnes_disponibles].head(2)
+        for idx, row in echantillon.iterrows():
+            print(f"      Membre {row['membres__id']}")
+            if 'V1M6_J' in row:
+                print(f"         Jour naissance : {row['V1M6_J']}")
+            if 'V1M6_M' in row:
+                print(f"         Mois naissance : {row['V1M6_M']}")
+            if 'V1M6_A' in row:
+                print(f"         Année naissance : {row['V1M6_A']}")
+            if 'V1M7' in row:
+                print(f"         Age individu : {row['V1M7']}")
+
+# Préchargement des AUTRES variables individuelles du Passage 1
+variables_precharge = {
+    'V1M4': 'M4',
+    'V1M9': 'M9',
+    'V1M12': 'M12',
+    'V1EF1': 'EF1',
+    'V1FP1': 'FP1',
+    'V1EP1a': 'EP1a'
+}
+
+for var_dest, var_source in variables_precharge.items():
+    if var_source in MembresVF.columns:
+        MembresVF[var_dest] = MembresVF[var_source]
+    else:
+        MembresVF[var_dest] = None
+        print(f"   ⚠️  Variable {var_source} non trouvée pour créer {var_dest}")
+        
+
+#************************************************************************************
 # Variables de contact et localisation (module Q1)
 variables_q1 = ['Q1_01', 'Q1_1', 'Q1_4', 'Q1_7', 'Q1_9',
                 'Q1_10__1', 'Q1_10__2', 'Q1_10__3', 'Q1_10__4',
@@ -1019,10 +1086,16 @@ colonnes_membres = [
     
     # Variables préchargées du Passage 1
     'V1M4', 'V1M9', 'V1M12', 'membre_id_v1_IND', 
+    
+    # ✨ NOUVELLES VARIABLES : Date de naissance du Passage 1
+    'V1M6_J', 'V1M6_M', 'V1M6_A', 'V1M7',
+
+    
     'V1Q1_01', 'V1Q1_1', 'V1Q1_4', 'V1Q1_7', 'V1Q1_9',
     'V1Q1_10__1', 'V1Q1_10__2', 'V1Q1_10__3', 'V1Q1_10__4',
     'V1Q1_12',
     'V1Q1_13__1', 'V1Q1_13__2', 'V1Q1_13__3', 'V1Q1_13__4','V1EP1a',
+        
     'interview__id',
     
     # Variables de contexte
@@ -1036,6 +1109,7 @@ colonnes_membres = [
     'statut_MO', 'cle_individuA','V1interviewkey', 
     'V1interviewkey_nextTrim', 'V1interviewkey1er',
     'Statut_Res', 'hha_COMP'
+    
 ]
 
 # Filtrer pour ne garder que les colonnes existantes
