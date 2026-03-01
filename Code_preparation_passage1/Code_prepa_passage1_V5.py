@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Created on Fri Jan  9 21:55:15 2026
+Created on Tue Feb 24 21:41:34 2026
 
 @author: mg.kouame
 """
@@ -11,29 +11,41 @@ PROGRAMME : Préparation des fichiers de collecte terrain (Passage 1)
 ================================================================================
 OBJECTIF  : Préparer les fichiers Excel pour la collecte de terrain du Passage 1
             en affectant les Zones de Dénombrement (ZD) aux agents de collecte
-            et en générant les fichiers de Dénombrement et Ménage.
+            et en générant les fichiers de Dénombrement, Ménage et Calendrier.
 
 CONTEXTE  : Enquête trimestrielle sur l'emploi - Collecte sur 10 ans
             - Passage 1 : Collecte initiale sur le terrain (Dénombrement + Ménages)
             - Chaque trimestre visite de nouvelles ZD selon l'échantillonnage
             - Affectation automatique des agents selon leur région
-            
+
 PROCESSUS :
     1. Charger l'échantillon des ZD à visiter (filtré par sous-échantillon)
     2. Fusionner avec les données de géoréférencement
     3. Affecter automatiquement les agents de collecte par région
     4. Générer le fichier Dénombrement (1 ligne par ZD)
-    5. Générer le fichier Ménage avec variable Reference (duplication pour hors-ABIDJAN)
-    6. Créer les fichiers séparés ABIDJAN / HORS-ABIDJAN
+    5. Générer le fichier Ménage avec variable Reference (duplication hors-ABIDJAN)
+    6. Générer le fichier Calendrier_menage avec 4 variables de dates de semaines
+    7. Créer les fichiers séparés ABIDJAN / HORS-ABIDJAN
 
-MODIFICATIONS :
-    - Ajout de la variable Reference dans le fichier Ménage
-    - Duplication des lignes NON-ABIDJAN (Reference = 1 et 2)
-    - Génération de 6 fichiers : Menage, Denombrement (complet, ABIDJAN, HORS-ABIDJAN)
+LOGIQUE CALENDRIER :
+    - ABIDJAN (13 ZD) : 1 seule semaine par ZD
+        * Ordre = numéro de semaine (1 à 13)
+        * Date_debut_sem_1_ref / Date_fin_sem_1_ref remplies
+        * Date_debut_sem_2_ref / Date_fin_sem_2_ref vides
+    - HORS-ABIDJAN (32 régions, 7 ZD) : ZD1-6 sur 2 semaines, ZD7 sur 1 semaine
+        * Ordre=1 → sem 1+2 | Ordre=2 → sem 3+4 | ... | Ordre=6 → sem 11+12
+        * Ordre=7 → sem 13 (sem_1 = sem_2, valeur répétée)
 
-AUTEUR    : KOUAME KOUASSI GUY MARTIAL 
+MODIFICATIONS v3.0 :
+    - Refonte complète du fichier Calendrier_menage
+    - 4 nouvelles variables de dates : Date_debut_sem_1_ref, Date_fin_sem_1_ref,
+      Date_debut_sem_2_ref, Date_fin_sem_2_ref
+    - Déduplication du Calendrier via colonne Code1
+    - Suppression des anciennes colonnes Date_debut_sem_ref / Date_fin_sem_ref
+
+AUTEUR    : KOUAME KOUASSI GUY MARTIAL
 DATE      : 26 décembre 2025
-VERSION   : 2.0 - Ajout variable Reference et fichiers séparés
+VERSION   : 3.0
 ================================================================================
 """
 
@@ -45,66 +57,59 @@ import numpy as np
 # ============================================================================
 
 # --- PARAMÈTRES DE LA COLLECTE ---
-TRIMESTRE_COLLECTE = "1T2026"           # Trimestre de collecte (ex: 1T2026, 2T2025, etc.)
-TRIMESTRE_COLLECTE_DATE = "T1_2026"     # Pour l'importation de la date : Trimestre de collecte (ex: 1T2026, 2T2025, etc.)
-NUMERO_TRIMESTRE = 1                     # Numéro du trimestre (1, 2, 3 ou 4)
-MOIS_COLLECTE = 1                        # Mois de début de collecte (1=Janvier, 4=Avril, etc.)
-ANNEE_COLLECTE = 2026                    # Année de collecte
+TRIMESTRE_COLLECTE      = "1T2026"    # Ex: 1T2026, 2T2025, etc.
+TRIMESTRE_COLLECTE_DATE = "T1_2026"   # Format pour le fichier Semaine_ref
+NUMERO_TRIMESTRE        = 1           # Numéro du trimestre (1, 2, 3 ou 4)
+MOIS_COLLECTE           = 1           # Mois de début (1=Janvier, 4=Avril, etc.)
+ANNEE_COLLECTE          = 2026        # Année de collecte
 
 # --- PARAMÈTRES D'ÉCHANTILLONNAGE ---
-SOUS_ECHANTILLON = 8                     # Numéro du sous-échantillon à traiter (ex: 7, 8, etc.)
-                                         # Correspond à la variable "sous_echant" du fichier
+SOUS_ECHANTILLON        = 8           # Numéro du sous-échantillon (variable "sous_echant")
 
 # --- PARAMÈTRES DE LA COLLECTE MÉNAGE ---
-NOMBRE_MENAGES_PAR_ZD = 6               # Nombre de ménages à interroger par ZD
+NOMBRE_MENAGES_PAR_ZD   = 6           # Nombre de ménages à interroger par ZD
 
-# --- CHEMINS DES FICHIERS D'ENTRÉE ---
-DOSSIER_TRAVAIL = r"D:\ENEM_Working\Base_prechargement_ENEM\Code_prepa_passage1"
-
+# --- CHEMINS DES FICHIERS ---
+DOSSIER_TRAVAIL          = r"D:\ENEM_Working\Base_prechargement_ENEM\Code_prepa_passage1"
 DOSSIER_TRAVAIL_RESULTAT = r"D:\ENEM_Working\Base_prechargement_ENEM\Code_prepa_passage1\Resutat"
 
-# Il y a quelque temps qu'une zone de dénombrement avait été enquêtée par anticipation en 2024 (ZD 4091),
-# alors qu'elle était initialement programmée pour 2025.
-# Dans le cadre du respect du chronogramme actuel, les agents appelés à enquêter la ZD 4091 seront 
-# donc amenés à prendre en charge la ZD 4085.
-# Lors de la collecte du T4-2025, les agents du GBOKLE n'ont pas visité la 7ieme ZD , 
-# GRIHIRI	 KOUATE KAFANDO YEMBI	6027, sauf que dans le fichier original Echantillon_ZD_VF_ACTUALISEE
-# la ZD est situé à la 6ième ZD i.e semaine_ref==11 et sous_echant==7. 
-# Mais nous l'avons positioné en 7ieme ZD pour le T1-2026 i.e semaine_ref==13 et sous_echant==8
-# Nous avons fait cette modification dans le fichier Echantillon_ZD_VF_ACTUALISEE
-FICHIER_ECHANTILLON = r"D:\ENEM_Working\Base_prechargement_ENEM\Code_prepa_passage1\Echantillon_ZD_VF_ACTUALISEE.xlsx"
-FEUILLE_ECHANTILLON = "BASEGLO"          # Nom de la feuille Excel (ou None pour la feuille par défaut)
+# Fichiers d'entrée
+# Note : ZD 4091 enquêtée par anticipation en 2024 → remplacée par ZD 4085
+# Note : ZD 6027 (GBOKLE) repositionnée en 7ème ZD du T1-2026 (semaine_ref=13, sous_echant=8)
+FICHIER_ECHANTILLON  = r"D:\ENEM_Working\Base_prechargement_ENEM\Code_prepa_passage1\Echantillon_ZD_VF_ACTUALISEE.xlsx"
+FEUILLE_ECHANTILLON  = "BASEGLO"
 
-FICHIER_GEOREF = r"D:\ENEM_Working\Base_prechargement_ENEM\Code_prepa_passage1\VF_BASE_ILOT_12012024_VF_work_Geovf.xlsx"
+FICHIER_GEOREF       = r"D:\ENEM_Working\Base_prechargement_ENEM\Code_prepa_passage1\VF_BASE_ILOT_12012024_VF_work_Geovf.xlsx"
 
-FICHIER_EQUIPES = r"D:\ENEM_Working\Base_prechargement_ENEM\Code_prepa_passage1\EquipeParRegionVF.xlsx"
-FEUILLE_EQUIPES = "Equipe"
+FICHIER_EQUIPES      = r"D:\ENEM_Working\Base_prechargement_ENEM\Code_prepa_passage1\EquipeParRegionVF.xlsx"
+FEUILLE_EQUIPES      = "Equipe"
 
 FICHIER_SEMAINES_REF = r"D:\ENEM_Working\Base_prechargement_ENEM\Semaine_reference\Semaine_ref.xlsx"
 FEUILLE_SEMAINES_REF = "Semaine_ref_trim"
 
-# --- NOMS DES FICHIERS DE SORTIE ---
-NOM_FICHIER_DENOMBREMENT = f"Denombrement_{TRIMESTRE_COLLECTE}.xlsx"
-NOM_FICHIER_MENAGE = f"Menage_{TRIMESTRE_COLLECTE}.xlsx"
-NOM_FICHIER_MENAGE_ABIDJAN = f"Menage_ABIDJAN_{TRIMESTRE_COLLECTE}.xlsx"
-NOM_FICHIER_MENAGE_HORS_ABIDJAN = f"Menage_HORS_ABIDJAN_{TRIMESTRE_COLLECTE}.xlsx"
-NOM_FICHIER_DENOMBREMENT_ABIDJAN = f"Denombrement_ABIDJAN_{TRIMESTRE_COLLECTE}.xlsx"
+# Noms des fichiers de sortie
+NOM_FICHIER_DENOMBREMENT           = f"Denombrement_{TRIMESTRE_COLLECTE}.xlsx"
+NOM_FICHIER_MENAGE                 = f"Menage_{TRIMESTRE_COLLECTE}.xlsx"
+NOM_FICHIER_CALENDRIER_MENAGE      = f"Calendrier_menage_{TRIMESTRE_COLLECTE}.xlsx"
+NOM_FICHIER_MENAGE_ABIDJAN         = f"Menage_ABIDJAN_{TRIMESTRE_COLLECTE}.xlsx"
+NOM_FICHIER_MENAGE_HORS_ABIDJAN    = f"Menage_HORS_ABIDJAN_{TRIMESTRE_COLLECTE}.xlsx"
+NOM_FICHIER_DENOMBREMENT_ABIDJAN   = f"Denombrement_ABIDJAN_{TRIMESTRE_COLLECTE}.xlsx"
 NOM_FICHIER_DENOMBREMENT_HORS_ABIDJAN = f"Denombrement_HORS_ABIDJAN_{TRIMESTRE_COLLECTE}.xlsx"
 
 # ============================================================================
 # AFFICHAGE DES PARAMÈTRES
 # ============================================================================
 
-print("="*80)
+print("=" * 80)
 print("PRÉPARATION DES FICHIERS DE COLLECTE - PASSAGE 1")
-print("="*80)
+print("=" * 80)
 print(f"\n📅 PARAMÈTRES DE COLLECTE")
-print(f"   Trimestre     : {TRIMESTRE_COLLECTE}")
-print(f"   Année         : {ANNEE_COLLECTE}")
-print(f"   Mois          : {MOIS_COLLECTE}")
+print(f"   Trimestre        : {TRIMESTRE_COLLECTE}")
+print(f"   Année            : {ANNEE_COLLECTE}")
+print(f"   Mois             : {MOIS_COLLECTE}")
 print(f"   Sous-échantillon : {SOUS_ECHANTILLON}")
-print(f"   Ménages/ZD    : {NOMBRE_MENAGES_PAR_ZD}")
-print("\n" + "="*80 + "\n")
+print(f"   Ménages/ZD       : {NOMBRE_MENAGES_PAR_ZD}")
+print("\n" + "=" * 80 + "\n")
 
 # ============================================================================
 # CHARGEMENT DES DONNÉES
@@ -112,23 +117,21 @@ print("\n" + "="*80 + "\n")
 
 print("📂 CHARGEMENT DES DONNÉES...")
 
-# Charger l'échantillon des ZD
+# Échantillon des ZD
 if FEUILLE_ECHANTILLON:
     df_echantillon = pd.read_excel(FICHIER_ECHANTILLON, sheet_name=FEUILLE_ECHANTILLON)
 else:
     df_echantillon = pd.read_excel(FICHIER_ECHANTILLON)
-
-# Filtrer sur le sous-échantillon spécifié
 df_echantillon = df_echantillon[df_echantillon["sous_echant"] == SOUS_ECHANTILLON]
 
-# Charger le fichier de géoréférencement complet
+# Géoréférencement
 df_georef = pd.read_excel(FICHIER_GEOREF)
 
-# Charger la liste des équipes (feuille "Equipe", filtré sur Type="Agent de collecte")
+# Équipes (agents de collecte uniquement)
 df_equipes = pd.read_excel(FICHIER_EQUIPES, sheet_name=FEUILLE_EQUIPES)
 df_equipes = df_equipes[df_equipes["Type de compte"] == "Agent de collecte"]
 
-# Charger le fichier des semaines de référence
+# Semaines de référence
 df_semaines_ref = pd.read_excel(FICHIER_SEMAINES_REF, sheet_name=FEUILLE_SEMAINES_REF)
 
 print(f"   ✓ Échantillon          : {len(df_echantillon)} ZD (sous-échantillon {SOUS_ECHANTILLON})")
@@ -137,67 +140,45 @@ print(f"   ✓ Agents de collecte   : {len(df_equipes)} agents")
 print(f"   ✓ Semaines de référence: {len(df_semaines_ref)} semaines")
 
 # ============================================================================
-# PRÉPARATION ET FORMATAGE DES DONNÉES
+# PRÉPARATION ET FUSION DES DONNÉES
 # ============================================================================
 
-print("\n🔧 PRÉPARATION DES DONNÉES...")
+print("\n🔧 PRÉPARATION ET FUSION DES DONNÉES...")
 
-# Formater le numéro de ZD sur 4 chiffres avec zéros devant (ex: 5 → 0005)
+# Formater NUM_ZD_Vf sur 4 chiffres et créer la clé de fusion
 df_echantillon['NUM_ZD_Vf'] = df_echantillon['NUM_ZD_Vf'].astype(str).str.zfill(4)
-
-# Créer une clé unique pour la fusion : NomSp (Sous-Préfecture) + NUM_ZD_Vf
 df_echantillon["CLEZD"] = df_echantillon["NomSp"] + df_echantillon["NUM_ZD_Vf"]
 
-# ============================================================================
-# FUSION DES DONNÉES GÉOGRAPHIQUES
-# ============================================================================
-
-print("🔗 FUSION AVEC LE GÉORÉFÉRENCEMENT...")
-
-# Fusionner l'échantillon avec le fichier de géoréférencement sur la clé CLEZD
+# Fusion avec le géoréférencement
 data_merged = pd.merge(df_echantillon, df_georef, on='CLEZD', how='left')
 
-# Nettoyer les colonnes dupliquées après la fusion
-# - Supprimer les colonnes se terminant par "_x" (garder les valeurs de l'échantillon)
+# Nettoyer les colonnes dupliquées (_x supprimées, _y renommées)
 colonnes_x = [col for col in data_merged.columns if col.endswith('_x')]
 data_merged = data_merged.drop(columns=colonnes_x)
-
-# - Renommer les colonnes "_y" en supprimant le suffixe (garder les valeurs du géoréférencement)
 data_merged.rename(columns=lambda x: x.rstrip('_y') if x.endswith('_y') else x, inplace=True)
 
-print(f"   ✓ Fusion complétée : {len(data_merged)} enregistrements")
+print(f"   ✓ Fusion géoréférencement : {len(data_merged)} enregistrements")
 
 # ============================================================================
 # AFFECTATION DES AGENTS PAR RÉGION
 # ============================================================================
 
-print("👥 AFFECTATION DES AGENTS PAR RÉGION...")
+print("\n👥 AFFECTATION DES AGENTS PAR RÉGION...")
 
-# Créer un produit cartésien entre les ZD et les agents
-# (chaque ZD est associée à tous les agents)
-df_cross = pd.merge(data_merged, df_equipes, how='cross')
+# Produit cartésien ZD × Agents, puis filtrage par région
+df_cross    = pd.merge(data_merged, df_equipes, how='cross')
+df_resultat = df_cross[df_cross['Region'] == df_cross['NomReg']].copy()
 
-# Filtrer pour ne garder que les agents de la même région que la ZD
-# La colonne 'Region' vient de data_merged (région de la ZD)
-# La colonne 'NomReg' vient de df_equipes (région de l'agent)
-df_resultat = df_cross[df_cross['Region'] == df_cross['NomReg']]
+# Reformater NUM_ZD_Vf
+df_resultat['NUM_ZD_Vf'] = df_resultat['NUM_ZD_Vf'].astype(str).str.zfill(4)
 
 print(f"   ✓ {len(df_resultat)} affectations ZD-Agent créées")
-
-# Afficher un aperçu des affectations par région
 print("\n   📊 Répartition par région :")
 repartition = df_resultat.groupby('Region').size().sort_values(ascending=False)
-for region, count in repartition.head(10).items():
+for region, count in list(repartition.items())[:10]:
     print(f"      • {region}: {count} affectations")
 if len(repartition) > 10:
     print(f"      ... et {len(repartition) - 10} autres régions")
-
-# ============================================================================
-# FORMATAGE FINAL DES DONNÉES
-# ============================================================================
-
-# S'assurer que NUM_ZD_Vf est bien formaté sur 4 chiffres
-df_resultat['NUM_ZD_Vf'] = df_resultat['NUM_ZD_Vf'].astype(str).str.zfill(4)
 
 # ============================================================================
 # CRÉATION DE LA VARIABLE CODE1
@@ -205,33 +186,19 @@ df_resultat['NUM_ZD_Vf'] = df_resultat['NUM_ZD_Vf'].astype(str).str.zfill(4)
 
 print("\n🔢 CRÉATION DE LA VARIABLE CODE1...")
 
-# Créer une clé de groupement : NUM_ZD_Vf + NomQuartier (LibQtierCpt)
-df_resultat['cle_groupement'] = df_resultat['NUM_ZD_Vf'].astype(str) + "_" + df_resultat['LibQtierCpt'].astype(str)
+df_resultat['cle_groupement'] = (
+    df_resultat['NUM_ZD_Vf'].astype(str) + "_" + df_resultat['LibQtierCpt'].astype(str)
+)
 
-# Générer un nombre aléatoire de 8 chiffres pour chaque combinaison unique de NUM_ZD_Vf + LibQtierCpt
-np.random.seed(42)  # Pour la reproductibilité (optionnel, retirer si on veut du vrai aléatoire)
-
-# Obtenir les combinaisons uniques
+np.random.seed(42)
 combinaisons_uniques = df_resultat['cle_groupement'].unique()
+code_mapping = {cle: np.random.randint(10000000, 100000000) for cle in combinaisons_uniques}
 
-# Créer un dictionnaire avec un code de 8 chiffres pour chaque combinaison
-code_mapping = {}
-for cle in combinaisons_uniques:
-    # Générer un nombre aléatoire entre 10000000 et 99999999 (8 chiffres)
-    code_aleatoire = np.random.randint(10000000, 100000000)
-    code_mapping[cle] = code_aleatoire
+df_resultat['Code1'] = "A" + df_resultat['cle_groupement'].map(code_mapping).astype(str)
+df_resultat.drop(columns=['cle_groupement'], inplace=True)
 
-# Appliquer le mapping pour créer Code1
-df_resultat['code_8chiffres'] = df_resultat['cle_groupement'].map(code_mapping)
-
-# Construire Code1 : "A" + 8 chiffres aléatoires
-df_resultat['Code1'] = "A" + df_resultat['code_8chiffres'].astype(str)
-
-print(f"   ✓ {len(combinaisons_uniques)} codes uniques générés (ZD + Quartier)")
+print(f"   ✓ {len(combinaisons_uniques)} codes uniques générés")
 print(f"   ✓ Exemple de Code1 : {df_resultat['Code1'].iloc[0]}")
-
-# Nettoyer les colonnes temporaires
-df_resultat.drop(columns=['cle_groupement', 'code_8chiffres'], inplace=True)
 
 # ============================================================================
 # CRÉATION DE LA VARIABLE ORDRE
@@ -239,467 +206,357 @@ df_resultat.drop(columns=['cle_groupement', 'code_8chiffres'], inplace=True)
 
 print("\n📋 CRÉATION DE LA VARIABLE ORDRE...")
 
+# Abidjan : Ordre = semaine_ref (1 à 13)
+# Hors-Abidjan : semaine_ref impaire (1,3,5,7,9,11,13) → Ordre (1 à 7)
+correspondance_ordre = {1: 1, 3: 2, 5: 3, 7: 4, 9: 5, 11: 6, 13: 7}
+
 def calculer_ordre(row):
-    """
-    Calcule la valeur de Ordre selon la région et la semaine de référence
-    
-    Règles :
-    - Pour ABIDJAN : Ordre = semaine_ref (identique)
-    - Pour les autres régions : transformation selon table de correspondance
-    """
-    region = row['NomReg']
-    semaine = row['semaine_ref']
-    
-    # Pour Abidjan : Ordre = semaine_ref
-    if region == 'ABIDJAN':
-        return semaine
-    
-    # Pour les autres régions : table de correspondance
-    correspondance = {
-        1: 1,
-        3: 2,
-        5: 3,
-        7: 4,
-        9: 5,
-        11: 6,
-        13: 7
-    }
-    
-    # Retourner la correspondance, ou NaN si la semaine n'est pas dans la table
-    return correspondance.get(semaine, np.nan)
+    if row['NomReg'] == 'ABIDJAN':
+        return row['semaine_ref']
+    return correspondance_ordre.get(row['semaine_ref'], np.nan)
 
-# Appliquer la fonction pour créer la variable Ordre
-df_resultat['Ordre'] = df_resultat.apply(calculer_ordre, axis=1)
+df_resultat['Ordre'] = df_resultat.apply(calculer_ordre, axis=1).fillna(0).astype(int)
 
-# Convertir en entier (gérer les NaN éventuels)
-df_resultat['Ordre'] = df_resultat['Ordre'].fillna(0).astype(int)
-
-# Vérifier s'il y a des valeurs à 0 (cas problématiques)
-nb_ordre_zero = (df_resultat['Ordre'] == 0).sum()
-if nb_ordre_zero > 0:
-    print(f"   ⚠️  {nb_ordre_zero} affectations avec Ordre=0 (semaine_ref invalide)")
+nb_zero = (df_resultat['Ordre'] == 0).sum()
+if nb_zero > 0:
+    print(f"   ⚠️  {nb_zero} affectations avec Ordre=0 (semaine_ref invalide)")
 else:
     print(f"   ✓ Toutes les affectations ont un Ordre valide")
 
-# Afficher la répartition par région
-print("\n   📊 Répartition des Ordre par région :")
-repartition_ordre = df_resultat.groupby(['NomReg', 'Ordre']).size().reset_index(name='Count')
-regions_principales = df_resultat['NomReg'].value_counts().head(3).index
-
-for region in regions_principales:
-    ordres_region = repartition_ordre[repartition_ordre['NomReg'] == region]
-    print(f"      • {region}:")
-    for _, row in ordres_region.head(3).iterrows():
-        print(f"        - Ordre {int(row['Ordre'])}: {row['Count']} affectations")
-
 # ============================================================================
-# PRÉPARATION DES DATES DE RÉFÉRENCE
+# PRÉPARATION DES DATES DE RÉFÉRENCE (pour Dénombrement et Ménage)
 # ============================================================================
 
 print("\n📅 PRÉPARATION DES DATES DE RÉFÉRENCE...")
+print(f"   🔍 Colonnes dans Semaine_ref.xlsx : {list(df_semaines_ref.columns)}")
 
-# Vérifier que semaine_ref existe dans df_resultat
-if 'semaine_ref' not in df_resultat.columns:
-    print(f"   ⚠️  ERREUR : La colonne 'semaine_ref' n'existe pas dans {FICHIER_ECHANTILLON}")
-    print(f"   ⚠️  Veuillez vérifier que cette colonne existe dans la feuille {FEUILLE_ECHANTILLON}")
+df_semaines_trim = df_semaines_ref[df_semaines_ref['Trimestre'] == TRIMESTRE_COLLECTE_DATE].copy()
+
+if len(df_semaines_trim) == 0:
+    print(f"   ⚠️  ERREUR : Aucune ligne pour le trimestre '{TRIMESTRE_COLLECTE_DATE}'")
+    print(f"   ⚠️  Valeurs disponibles : {df_semaines_ref['Trimestre'].unique()}")
     df_resultat['Date1_ref'] = ""
     df_resultat['Date2_ref'] = ""
 else:
-    print(f"   ✓ Colonne 'semaine_ref' trouvée dans l'échantillon")
-    
-    # Afficher les colonnes disponibles dans le fichier de référence
-    print(f"   🔍 Colonnes dans Semaine_ref.xlsx : {list(df_semaines_ref.columns)}")
-    
-    # Filtrer STRICTEMENT sur le trimestre T1_2026
-    df_semaines_trim = df_semaines_ref[df_semaines_ref['Trimestre'] == TRIMESTRE_COLLECTE_DATE].copy()
-    
-    if len(df_semaines_trim) == 0:
-        print(f"   ⚠️  ERREUR : Aucune ligne trouvée pour le trimestre '{TRIMESTRE_COLLECTE}'")
-        print(f"   ⚠️  Valeurs de Trimestre disponibles : {df_semaines_ref['Trimestre'].unique()}")
-        df_resultat['Date1_ref'] = ""
-        df_resultat['Date2_ref'] = ""
-    else:
-        print(f"   ✓ {len(df_semaines_trim)} semaines trouvées pour le trimestre {TRIMESTRE_COLLECTE}")
-        
-        # Afficher les valeurs disponibles
-        print(f"   📊 Colonnes N_semaine disponibles : {sorted(df_semaines_trim['N_semaine'].unique())}")
-        print(f"   📊 Valeurs semaine_ref dans échantillon : {sorted(df_resultat['semaine_ref'].unique())}")
-        
-        # Initialiser les colonnes Date1_ref et Date2_ref
-        df_resultat['Date1_ref'] = None
-        df_resultat['Date2_ref'] = None
-        
-        # MÉTHODE RECHERCHEV : Parcourir chaque ligne et chercher la correspondance
-        nb_dates_trouvees = 0
-        nb_dates_non_trouvees = 0
-        
-        print(f"\n   🔄 Application du RECHERCHEV sur {len(df_resultat)} lignes...")
-        
-        for idx, row in df_resultat.iterrows():
-            semaine_ref_menage = row['semaine_ref']
-            
-            # Chercher la correspondance dans le fichier de référence
-            # pour le TRIMESTRE_COLLECTE et la semaine_ref du ménage
-            correspondance = df_semaines_trim[
-                df_semaines_trim['N_semaine'] == semaine_ref_menage
-            ]
-            
-            if len(correspondance) > 0:
-                # Récupérer Date1 et Date2
-                date1_ref = correspondance.iloc[0]['Date1']
-                date2_ref = correspondance.iloc[0]['Date2']
-                
-                # Assigner dans df_resultat
-                df_resultat.at[idx, 'Date1_ref'] = date1_ref
-                df_resultat.at[idx, 'Date2_ref'] = date2_ref
-                nb_dates_trouvees += 1
-            else:
-                nb_dates_non_trouvees += 1
-        
-        print(f"   ✅ Dates trouvées : {nb_dates_trouvees} / {len(df_resultat)} lignes")
-        
-        if nb_dates_non_trouvees > 0:
-            print(f"   ⚠️  {nb_dates_non_trouvees} lignes sans dates")
-            # Identifier les semaines problématiques
-            semaines_sans_dates = df_resultat[df_resultat['Date1_ref'].isna()]['semaine_ref'].unique()
-            print(f"   ⚠️  Semaines sans correspondance dans {TRIMESTRE_COLLECTE} : {sorted(semaines_sans_dates)}")
-        
-        # Convertir les dates au format YYYY-MM-DD si nécessaire
-        if pd.api.types.is_datetime64_any_dtype(df_resultat['Date1_ref']):
-            df_resultat['Date1_ref'] = df_resultat['Date1_ref'].dt.strftime('%Y-%m-%d')
-        if pd.api.types.is_datetime64_any_dtype(df_resultat['Date2_ref']):
-            df_resultat['Date2_ref'] = df_resultat['Date2_ref'].dt.strftime('%Y-%m-%d')
-        
-        # Remplacer les valeurs manquantes par des chaînes vides
-        df_resultat['Date1_ref'] = df_resultat['Date1_ref'].fillna("").astype(str)
-        df_resultat['Date2_ref'] = df_resultat['Date2_ref'].fillna("").astype(str)
-        
-        # Nettoyer les valeurs "NaT" ou "nan"
-        df_resultat['Date1_ref'] = df_resultat['Date1_ref'].replace(['NaT', 'nan', 'None'], "")
-        df_resultat['Date2_ref'] = df_resultat['Date2_ref'].replace(['NaT', 'nan', 'None'], "")
-        
-        # Afficher un échantillon des résultats
-        if nb_dates_trouvees > 0:
-            print(f"\n   📋 Échantillon des dates attribuées (5 premières lignes) :")
-            echantillon = df_resultat[df_resultat['Date1_ref'] != ""][['NUM_ZD_Vf', 'NomSp', 'semaine_ref', 'Date1_ref', 'Date2_ref']].head()
-            for idx, row in echantillon.iterrows():
-                print(f"      ZD {row['NUM_ZD_Vf']} ({row['NomSp']}) | Semaine {row['semaine_ref']} | {row['Date1_ref']} → {row['Date2_ref']}")
-        
-        # Afficher la répartition par semaine
-        print(f"\n   📊 Répartition des lignes par semaine de référence :")
-        repartition = df_resultat[df_resultat['Date1_ref'] != ""].groupby('semaine_ref').size().sort_index()
-        for semaine, count in repartition.head(7).items():
-            print(f"      • Semaine {semaine}: {count} lignes")
-        if len(repartition) > 7:
-            print(f"      ... et {len(repartition) - 7} autres semaines")
+    print(f"   ✓ {len(df_semaines_trim)} semaines trouvées pour {TRIMESTRE_COLLECTE}")
+
+    # Lookup rapide : N_semaine → (Date1, Date2)
+    lookup_n_semaine = {
+        row['N_semaine']: (row['Date1'], row['Date2'])
+        for _, row in df_semaines_trim.iterrows()
+    }
+
+    df_resultat['Date1_ref'] = df_resultat['semaine_ref'].map(
+        lambda s: lookup_n_semaine.get(s, (None, None))[0]
+    )
+    df_resultat['Date2_ref'] = df_resultat['semaine_ref'].map(
+        lambda s: lookup_n_semaine.get(s, (None, None))[1]
+    )
+
+    # Formatage des dates
+    for col in ['Date1_ref', 'Date2_ref']:
+        if pd.api.types.is_datetime64_any_dtype(df_resultat[col]):
+            df_resultat[col] = df_resultat[col].dt.strftime('%Y-%m-%d')
+        df_resultat[col] = (
+            df_resultat[col].fillna("").astype(str)
+            .replace(['NaT', 'nan', 'None'], "")
+        )
+
+    nb_ok  = (df_resultat['Date1_ref'] != "").sum()
+    nb_nok = (df_resultat['Date1_ref'] == "").sum()
+    print(f"   ✅ Dates trouvées : {nb_ok} / {len(df_resultat)} lignes")
+    if nb_nok > 0:
+        print(f"   ⚠️  {nb_nok} lignes sans dates")
 
 # ============================================================================
-# GÉNÉRATION DU FICHIER DÉNOMBREMENT (1 ligne par ZD)
+# GÉNÉRATION DU FICHIER DÉNOMBREMENT
 # ============================================================================
 
 print("\n📝 GÉNÉRATION DU FICHIER DÉNOMBREMENT...")
 
-denombrement = pd.DataFrame()
+denombrement = pd.DataFrame({
+    'Region'          : df_resultat['NomReg'],
+    'sp'              : df_resultat['NomSp'],
+    'ord_sem'         : "Sem_" + df_resultat['Ordre'].astype(str) + f"_{TRIMESTRE_COLLECTE}",
+    'HH01'            : TRIMESTRE_COLLECTE,
+    'HH0'             : f"1erPassage{TRIMESTRE_COLLECTE}-sp-" + df_resultat['NomSp'] + "-zd-" + df_resultat['NUM_ZD_Vf'],
+    'HH2A'            : df_resultat['Dr'],
+    'HH1'             : df_resultat['NumeroDistrict'],
+    'HH2'             : df_resultat['NumeroRegion'],
+    'HH3'             : df_resultat['NumeroDepart'],
+    'HH4'             : df_resultat['NumeroSp'],
+    'HH6'             : df_resultat['CodeMilieu'],
+    'HH8'             : df_resultat['NUM_ZD_Vf'],
+    'HH8A'            : np.where(df_resultat['Plusieurs Loc'] == 1, df_resultat['NomLoc'], 'Zd sur plusieurs localité'),
+    'HH7'             : np.where(df_resultat['Zd campement'] == "Pas  campement", 1, 7),
+    'HH8B'            : df_resultat['LibQtierCpt'],
+    'trimestreencours': NUMERO_TRIMESTRE,
+    'mois_en_cours'   : MOIS_COLLECTE,
+    'annee'           : ANNEE_COLLECTE,
+    'Date1'           : df_resultat['Date1_ref'],
+    'Code1'           : df_resultat['Code1'],
+    '_responsible'    : df_resultat['login'],
+    '_quantity'       : 1,
+    'Ordre'           : df_resultat['Ordre'],
+    'cle'             : df_resultat['NumeroSp'].astype(str) + df_resultat['NUM_ZD_Vf'].astype(str),
+})
 
-# Informations administratives
-denombrement['Region'] = df_resultat['NomReg']
-denombrement['sp'] = df_resultat['NomSp']
-denombrement['ord_sem'] = "Sem_" + df_resultat['Ordre'].astype(str) + f"_{TRIMESTRE_COLLECTE}" 
-denombrement['HH01'] = TRIMESTRE_COLLECTE
-denombrement['HH0'] = f"1erPassage{TRIMESTRE_COLLECTE}-sp-" + df_resultat['NomSp'] + "-zd-" + df_resultat['NUM_ZD_Vf']
-denombrement['HH2A'] = df_resultat['Dr']  # Direction Régionale
-
-# Codes géographiques
-denombrement['HH1'] = df_resultat['NumeroDistrict']
-denombrement['HH2'] = df_resultat['NumeroRegion']
-denombrement['HH3'] = df_resultat['NumeroDepart']
-denombrement['HH4'] = df_resultat['NumeroSp']
-denombrement['HH6'] = df_resultat['CodeMilieu']
-denombrement['HH8'] = df_resultat['NUM_ZD_Vf']
-
-# Informations sur la localité
-denombrement['HH8A'] = np.where(
-    df_resultat['Plusieurs Loc'] == 1, 
-    df_resultat['NomLoc'], 
-    'Zd sur plusieurs localité'
-)
-
-# Type de zone (1=zone normale, 7=campement)
-denombrement['HH7'] = np.where(
-    df_resultat['Zd campement'] == "Pas  campement", 
-    1, 
-    7
-)
-
-denombrement['HH8B'] = df_resultat['LibQtierCpt']  # Libellé Quartier/Campement
-
-# Informations temporelles
-denombrement['trimestreencours'] = NUMERO_TRIMESTRE
-denombrement['mois_en_cours'] = MOIS_COLLECTE
-denombrement['annee'] = ANNEE_COLLECTE
-denombrement['Date1'] = df_resultat['Date1_ref']  # Dates de début de semaine de référence
-
-# Informations d'affectation
-denombrement['Code1'] = df_resultat['Code1']
-denombrement['_responsible'] = df_resultat['login']  # Agent responsable
-denombrement['_quantity'] = 1  # 1 dénombrement par ZD
-denombrement['Ordre'] = df_resultat['Ordre']
-denombrement['cle'] = df_resultat['NumeroSp'].astype(str) + df_resultat['NUM_ZD_Vf'].astype(str)
-
-# Sauvegarder le fichier complet
-fichier_sortie_denom = DOSSIER_TRAVAIL_RESULTAT + "\\" + NOM_FICHIER_DENOMBREMENT
-denombrement.to_excel(fichier_sortie_denom, index=False)
-print(f"   ✓ Fichier créé : {NOM_FICHIER_DENOMBREMENT}")
-print(f"   ✓ Nombre de lignes : {len(denombrement)}")
-
-# Séparer ABIDJAN et HORS-ABIDJAN
-denombrement_abidjan = denombrement[denombrement['Region'] == 'ABIDJAN'].copy()
+denombrement_abidjan      = denombrement[denombrement['Region'] == 'ABIDJAN'].copy()
 denombrement_hors_abidjan = denombrement[denombrement['Region'] != 'ABIDJAN'].copy()
 
-# Sauvegarder les fichiers séparés
-fichier_denom_abidjan = DOSSIER_TRAVAIL_RESULTAT + "\\" + NOM_FICHIER_DENOMBREMENT_ABIDJAN
-fichier_denom_hors_abidjan = DOSSIER_TRAVAIL_RESULTAT + "\\" + NOM_FICHIER_DENOMBREMENT_HORS_ABIDJAN
+denombrement.to_excel(DOSSIER_TRAVAIL_RESULTAT + "\\" + NOM_FICHIER_DENOMBREMENT, index=False)
+denombrement_abidjan.to_excel(DOSSIER_TRAVAIL_RESULTAT + "\\" + NOM_FICHIER_DENOMBREMENT_ABIDJAN, index=False)
+denombrement_hors_abidjan.to_excel(DOSSIER_TRAVAIL_RESULTAT + "\\" + NOM_FICHIER_DENOMBREMENT_HORS_ABIDJAN, index=False)
 
-denombrement_abidjan.to_excel(fichier_denom_abidjan, index=False)
-denombrement_hors_abidjan.to_excel(fichier_denom_hors_abidjan, index=False)
-
-print(f"   ✓ Fichier ABIDJAN créé : {NOM_FICHIER_DENOMBREMENT_ABIDJAN} ({len(denombrement_abidjan)} lignes)")
-print(f"   ✓ Fichier HORS-ABIDJAN créé : {NOM_FICHIER_DENOMBREMENT_HORS_ABIDJAN} ({len(denombrement_hors_abidjan)} lignes)")
+print(f"   ✓ {NOM_FICHIER_DENOMBREMENT} ({len(denombrement)} lignes)")
+print(f"   ✓ {NOM_FICHIER_DENOMBREMENT_ABIDJAN} ({len(denombrement_abidjan)} lignes)")
+print(f"   ✓ {NOM_FICHIER_DENOMBREMENT_HORS_ABIDJAN} ({len(denombrement_hors_abidjan)} lignes)")
 
 # ============================================================================
-# GÉNÉRATION DU FICHIER MÉNAGE (N lignes par ZD)
+# GÉNÉRATION DU FICHIER MÉNAGE
 # ============================================================================
 
 print(f"\n🏠 GÉNÉRATION DU FICHIER MÉNAGE ({NOMBRE_MENAGES_PAR_ZD} ménages par ZD)...")
 
-menage = pd.DataFrame()
+menage = pd.DataFrame({
+    'Region'          : df_resultat['NomReg'],
+    'sp'              : df_resultat['NomSp'],
+    'Cohorte'         : TRIMESTRE_COLLECTE,
+    'ord_sem'         : "Sem_" + df_resultat['Ordre'].astype(str) + f"_{TRIMESTRE_COLLECTE}",
+    'HH01'            : TRIMESTRE_COLLECTE,
+    'HH0'             : f"1erPassage{TRIMESTRE_COLLECTE}-sp-" + df_resultat['NomSp'] + "-zd-" + df_resultat['NUM_ZD_Vf'],
+    'HH2A'            : df_resultat['Dr'],
+    'HH1'             : df_resultat['NumeroDistrict'],
+    'HH2'             : df_resultat['NumeroRegion'],
+    'HH3'             : df_resultat['NumeroDepart'],
+    'HH4'             : df_resultat['NumeroSp'],
+    'HH6'             : df_resultat['CodeMilieu'],
+    'HH8'             : df_resultat['NUM_ZD_Vf'],
+    'HH8A'            : np.where(df_resultat['Plusieurs Loc'] == 1, df_resultat['NomLoc'], 'Zd sur plusieurs localité'),
+    'HH7'             : 1,
+    'HH7B'            : 1,
+    'HH8B'            : df_resultat['LibQtierCpt'],
+    'rghab'           : 1,
+    'rgmen'           : 1,
+    'V1MODINTR'       : 1,
+    'trimestreencours': NUMERO_TRIMESTRE,
+    'mois_en_cours'   : MOIS_COLLECTE,
+    'annee'           : ANNEE_COLLECTE,
+    'Date1'           : df_resultat['Date1_ref'],
+    'Date2'           : df_resultat['Date2_ref'],
+    'Reference'       : 1,
+    'Code1'           : df_resultat['Code1'],
+    '_responsible'    : df_resultat['login'],
+    '_quantity'       : NOMBRE_MENAGES_PAR_ZD,
+    'Ordre'           : df_resultat['Ordre'],
+    'cle'             : df_resultat['NumeroSp'].astype(str) + df_resultat['NUM_ZD_Vf'].astype(str),
+})
 
-# Informations administratives
-menage['Region'] = df_resultat['NomReg']
-menage['sp'] = df_resultat['NomSp']
-menage['Cohorte'] = f"{TRIMESTRE_COLLECTE}"
-menage['ord_sem'] = "Sem_" + df_resultat['Ordre'].astype(str) + f"_{TRIMESTRE_COLLECTE}"
-menage['HH01'] = TRIMESTRE_COLLECTE
-menage['HH0'] = f"1erPassage{TRIMESTRE_COLLECTE}-sp-" + df_resultat['NomSp'] + "-zd-" + df_resultat['NUM_ZD_Vf']
-menage['HH2A'] = df_resultat['Dr']  # Direction Régionale
-
-# Codes géographiques
-menage['HH1'] = df_resultat['NumeroDistrict']
-menage['HH2'] = df_resultat['NumeroRegion']
-menage['HH3'] = df_resultat['NumeroDepart']
-menage['HH4'] = df_resultat['NumeroSp']
-menage['HH6'] = df_resultat['CodeMilieu']
-menage['HH8'] = df_resultat['NUM_ZD_Vf']
-
-# Informations sur la localité
-menage['HH8A'] = np.where(
-    df_resultat['Plusieurs Loc'] == 1, 
-    df_resultat['NomLoc'], 
-    'Zd sur plusieurs localité'
-)
-
-# Type de zone (toujours 1 pour le fichier Ménage)
-menage['HH7'] = 1
-menage['HH7B'] = 1
-
-menage['HH8B'] = df_resultat['LibQtierCpt']  # Libellé Quartier/Campement
-
-# Informations de collecte
-menage['rghab'] = 1  # Rang habitation
-menage['rgmen'] = 1  # Rang ménage
-menage['V1MODINTR'] = 1  # Mode d'interview
-
-# Informations temporelles
-menage['trimestreencours'] = NUMERO_TRIMESTRE
-menage['mois_en_cours'] = MOIS_COLLECTE
-menage['annee'] = ANNEE_COLLECTE
-menage['Date1'] = df_resultat['Date1_ref']  # Dates de début de semaine de référence
-menage['Date2'] = df_resultat['Date2_ref']  # Dates de fin de semaine de référence
-
-# Variables restantes (avant Reference - on doit d'abord créer Ordre)
-menage['Code1'] = df_resultat['Code1'] 
-
-# Informations d'affectation
-menage['_responsible'] = df_resultat['login']  # Agent responsable
-menage['_quantity'] = NOMBRE_MENAGES_PAR_ZD  # Nombre de ménages à interroger par ZD
-menage['Ordre'] = df_resultat['Ordre']  # IMPORTANT : Créer Ordre AVANT Reference
-menage['cle'] = df_resultat['NumeroSp'].astype(str) + df_resultat['NUM_ZD_Vf'].astype(str)
-
-# ============================================================================
-# CRÉATION DE LA VARIABLE REFERENCE (NOUVELLE LOGIQUE)
-# ============================================================================
-
-print("\n🔢 CRÉATION DE LA VARIABLE REFERENCE...")
-
-# Créer la variable Reference basée sur la région
-# IMPORTANT : Ordre doit exister dans le DataFrame avant cette étape
-menage['Reference'] = menage.apply(
-    lambda row: row['Ordre'] if row['Region'] == 'ABIDJAN' else 1, 
-    axis=1
-)
-
-print(f"   ✓ Variable Reference créée")
-print(f"      • Lignes ABIDJAN : Reference = Ordre")
-print(f"      • Lignes NON-ABIDJAN : Reference = 1 (avant duplication)")
-
-# Réorganiser les colonnes pour placer Reference entre Date2 et Code1
-# Liste des colonnes dans l'ordre souhaité
-colonnes_ordre = [
-    'Region', 'sp', 'Cohorte', 'ord_sem', 'HH01', 'HH0', 'HH2A',
-    'HH1', 'HH2', 'HH3', 'HH4', 'HH6', 'HH8', 'HH8A', 'HH7', 'HH7B', 'HH8B',
-    'rghab', 'rgmen', 'V1MODINTR',
-    'trimestreencours', 'mois_en_cours', 'annee', 'Date1', 'Date2',
-    'Reference',  # Placée entre Date2 et Code1
-    'Code1', '_responsible', '_quantity', 'Ordre', 'cle'
-]
-
-# Appliquer l'ordre des colonnes
-menage = menage[colonnes_ordre]
-
-# ============================================================================
-# DUPLICATION DES LIGNES NON-ABIDJAN AVEC REFERENCE=2
-# ============================================================================
-
-print("\n📋 DUPLICATION DES LIGNES NON-ABIDJAN...")
-
-# Séparer ABIDJAN et NON-ABIDJAN
-menage_abidjan = menage[menage['Region'] == 'ABIDJAN'].copy()
-menage_non_abidjan_ref1 = menage[menage['Region'] != 'ABIDJAN'].copy()
-
-print(f"   • Lignes ABIDJAN : {len(menage_abidjan)}")
-print(f"   • Lignes NON-ABIDJAN (Reference=1) : {len(menage_non_abidjan_ref1)}")
-
-# Créer la duplication avec Reference=2
-menage_non_abidjan_ref2 = menage_non_abidjan_ref1.copy()
+# Duplication des lignes HORS-ABIDJAN avec Reference=2
+menage_abidjan           = menage[menage['Region'] == 'ABIDJAN'].copy()
+menage_non_abidjan_ref1  = menage[menage['Region'] != 'ABIDJAN'].copy()
+menage_non_abidjan_ref2  = menage_non_abidjan_ref1.copy()
 menage_non_abidjan_ref2['Reference'] = 2
 
-print(f"   • Lignes NON-ABIDJAN dupliquées (Reference=2) : {len(menage_non_abidjan_ref2)}")
-
-# ============================================================================
-# ASSEMBLAGE FINAL : OPTION B (Lignes Reference=1 et 2 côte à côte par ZD)
-# ============================================================================
-
-print("\n🔧 ASSEMBLAGE DES DONNÉES (Option B : lignes côte à côte par ZD)...")
-
-# Pour les lignes NON-ABIDJAN, créer une clé de tri pour les regrouper par ZD
-menage_non_abidjan_ref1['cle_tri'] = (
+# Tri pour regrouper les lignes Reference=1 et 2 par ZD
+cle_tri = (
     menage_non_abidjan_ref1['Region'].astype(str) + "_" +
     menage_non_abidjan_ref1['sp'].astype(str) + "_" +
     menage_non_abidjan_ref1['HH8'].astype(str)
 )
-menage_non_abidjan_ref2['cle_tri'] = (
-    menage_non_abidjan_ref2['Region'].astype(str) + "_" +
-    menage_non_abidjan_ref2['sp'].astype(str) + "_" +
-    menage_non_abidjan_ref2['HH8'].astype(str)
+menage_non_abidjan_ref1 = menage_non_abidjan_ref1.assign(cle_tri=cle_tri)
+menage_non_abidjan_ref2 = menage_non_abidjan_ref2.assign(cle_tri=cle_tri)
+
+menage_non_abidjan_combine = (
+    pd.concat([menage_non_abidjan_ref1, menage_non_abidjan_ref2], ignore_index=True)
+    .sort_values(by=['cle_tri', 'Reference'])
+    .drop(columns=['cle_tri'])
 )
 
-# Concaténer Reference=1 et Reference=2
-menage_non_abidjan_combine = pd.concat([
-    menage_non_abidjan_ref1, 
-    menage_non_abidjan_ref2
-], ignore_index=True)
+menage_final = pd.concat([menage_abidjan, menage_non_abidjan_combine], ignore_index=True)
 
-# Trier par clé de ZD puis par Reference (1 puis 2)
-menage_non_abidjan_combine = menage_non_abidjan_combine.sort_values(
-    by=['cle_tri', 'Reference']
-).drop(columns=['cle_tri'])
+# Sauvegarde
+menage_final.to_excel(DOSSIER_TRAVAIL_RESULTAT + "\\" + NOM_FICHIER_MENAGE, index=False)
+menage_abidjan.to_excel(DOSSIER_TRAVAIL_RESULTAT + "\\" + NOM_FICHIER_MENAGE_ABIDJAN, index=False)
+menage_non_abidjan_combine.to_excel(DOSSIER_TRAVAIL_RESULTAT + "\\" + NOM_FICHIER_MENAGE_HORS_ABIDJAN, index=False)
 
-# Combiner avec ABIDJAN
-menage_final = pd.concat([
-    menage_abidjan,
-    menage_non_abidjan_combine
-], ignore_index=True)
+print(f"   ✓ {NOM_FICHIER_MENAGE} ({len(menage_final)} lignes)")
+print(f"   ✓ {NOM_FICHIER_MENAGE_ABIDJAN} ({len(menage_abidjan)} lignes)")
+print(f"   ✓ {NOM_FICHIER_MENAGE_HORS_ABIDJAN} ({len(menage_non_abidjan_combine)} lignes)")
 
-print(f"   ✓ Assemblage terminé")
-print(f"      • Total ABIDJAN : {len(menage_abidjan)} lignes")
-print(f"      • Total NON-ABIDJAN : {len(menage_non_abidjan_combine)} lignes (incluant duplication)")
-print(f"      • TOTAL FINAL : {len(menage_final)} lignes")
-
-# ============================================================================
-# SAUVEGARDE DES FICHIERS MÉNAGE
-# ============================================================================
-
-print("\n💾 SAUVEGARDE DES FICHIERS MÉNAGE...")
-
-# Fichier complet
-fichier_sortie_menage = DOSSIER_TRAVAIL_RESULTAT + "\\" + NOM_FICHIER_MENAGE
-menage_final.to_excel(fichier_sortie_menage, index=False)
-print(f"   ✓ Fichier complet créé : {NOM_FICHIER_MENAGE}")
-print(f"   ✓ Nombre de lignes : {len(menage_final)}")
-
-# Fichier ABIDJAN uniquement
-fichier_menage_abidjan = DOSSIER_TRAVAIL_RESULTAT + "\\" + NOM_FICHIER_MENAGE_ABIDJAN
-menage_abidjan.to_excel(fichier_menage_abidjan, index=False)
-print(f"   ✓ Fichier ABIDJAN créé : {NOM_FICHIER_MENAGE_ABIDJAN}")
-print(f"   ✓ Nombre de lignes : {len(menage_abidjan)}")
-
-# Fichier HORS-ABIDJAN (avec les 2 références)
-fichier_menage_hors_abidjan = DOSSIER_TRAVAIL_RESULTAT + "\\" + NOM_FICHIER_MENAGE_HORS_ABIDJAN
-menage_non_abidjan_combine.to_excel(fichier_menage_hors_abidjan, index=False)
-print(f"   ✓ Fichier HORS-ABIDJAN créé : {NOM_FICHIER_MENAGE_HORS_ABIDJAN}")
-print(f"   ✓ Nombre de lignes : {len(menage_non_abidjan_combine)}")
-
-# ============================================================================
-# STATISTIQUES DÉTAILLÉES SUR LA VARIABLE REFERENCE
-# ============================================================================
-
-print("\n📊 STATISTIQUES SUR LA VARIABLE REFERENCE...")
-
-stats_ref = menage_final.groupby(['Region', 'Reference']).size().reset_index(name='Nombre_lignes')
-
-# Afficher pour ABIDJAN
-print("\n   • ABIDJAN (Reference = Ordre) :")
-stats_abidjan = stats_ref[stats_ref['Region'] == 'ABIDJAN'].sort_values('Reference')
-for _, row in stats_abidjan.head(7).iterrows():
-    print(f"      - Reference {int(row['Reference'])}: {row['Nombre_lignes']} lignes")
-
-# Afficher pour quelques régions NON-ABIDJAN
-print("\n   • HORS-ABIDJAN (échantillon de régions) :")
-regions_hors_abidjan = menage_final[menage_final['Region'] != 'ABIDJAN']['Region'].unique()[:3]
-for region in regions_hors_abidjan:
-    stats_region = stats_ref[stats_ref['Region'] == region]
-    print(f"      {region}:")
-    for _, row in stats_region.iterrows():
-        print(f"        - Reference {int(row['Reference'])}: {row['Nombre_lignes']} lignes")
-
-# Vérification : Toutes les lignes NON-ABIDJAN doivent avoir Reference=1 et Reference=2
-verification = menage_final[menage_final['Region'] != 'ABIDJAN']['Reference'].value_counts().sort_index()
-print(f"\n   📌 Vérification NON-ABIDJAN :")
-for ref, count in verification.items():
-    print(f"      • Reference {int(ref)}: {count} lignes")
-
-nb_ref1 = verification.get(1, 0)
-nb_ref2 = verification.get(2, 0)
+# Vérification de la duplication
+nb_ref1 = (menage_non_abidjan_combine['Reference'] == 1).sum()
+nb_ref2 = (menage_non_abidjan_combine['Reference'] == 2).sum()
 if nb_ref1 == nb_ref2:
-    print(f"   ✅ Duplication correcte : {nb_ref1} lignes avec Reference=1 et {nb_ref2} avec Reference=2")
+    print(f"   ✅ Duplication correcte : {nb_ref1} lignes Reference=1 et {nb_ref2} Reference=2")
 else:
-    print(f"   ⚠️  ATTENTION : Déséquilibre entre Reference=1 ({nb_ref1}) et Reference=2 ({nb_ref2})")
+    print(f"   ⚠️  Déséquilibre : Reference=1 ({nb_ref1}) vs Reference=2 ({nb_ref2})")
+
+# ============================================================================
+# GÉNÉRATION DU FICHIER CALENDRIER_MENAGE (VERSION CORRIGÉE)
+# ============================================================================
+
+print("\n📅 GÉNÉRATION DU FICHIER CALENDRIER_MENAGE...")
+
+# --- Lookup semaines depuis Semaine_ref.xlsx ---
+# La colonne s'appelle 'Numero_semaine' avec valeurs texte : "Semaine 1", "Semaine 2"...
+df_semaines_cal = df_semaines_ref[df_semaines_ref['Trimestre'] == TRIMESTRE_COLLECTE_DATE].copy()
+
+if len(df_semaines_cal) == 0:
+    print(f"   ⚠️  ERREUR : Aucune ligne pour le trimestre '{TRIMESTRE_COLLECTE_DATE}'")
+else:
+    print(f"   ✓ {len(df_semaines_cal)} semaines trouvées pour {TRIMESTRE_COLLECTE_DATE}")
+
+# Extraire le numéro entier depuis "Semaine 1" → 1
+df_semaines_cal['num_sem'] = (
+    df_semaines_cal['Numero_semaine'].astype(str).str.extract(r'(\d+)').astype(int)
+)
+
+def formater_date(val):
+    """Convertit une date en chaîne YYYY-MM-DD ou retourne chaîne vide."""
+    if pd.isna(val) or val is None:
+        return ""
+    if hasattr(val, 'strftime'):
+        return val.strftime('%Y-%m-%d')
+    s = str(val).strip()
+    return "" if s in ('NaT', 'nan', 'None', '') else s
+
+# Dictionnaire : num_sem → (date_debut, date_fin)
+lookup_semaines_cal = {
+    row['num_sem']: (formater_date(row['Date_debut_sem_ref']), formater_date(row['Date_fin_sem_ref']))
+    for _, row in df_semaines_cal.iterrows()
+}
+print(f"   ✓ Lookup semaines créé : {sorted(lookup_semaines_cal.keys())}")
+
+# --- Table de correspondance Ordre → numéros de semaines ---
+# Hors-Abidjan : Ordre 1-6 → 2 semaines, Ordre 7 → semaine 13 répétée
+# Abidjan : Ordre = numéro de semaine
+correspondance_cal = {
+    1: (1,  2),
+    2: (3,  4),
+    3: (5,  6),
+    4: (7,  8),
+    5: (9,  10),
+    6: (11, 12),
+    7: (13, 13),  # Semaine 13 répétée pour sem_1 et sem_2
+}
+
+def get_dates_calendrier(row):
+    """
+    Retourne (Date_debut_sem_1, Date_fin_sem_1, Date_debut_sem_2, Date_fin_sem_2)
+
+    - ABIDJAN : Ordre = numéro de semaine → sem_1 remplie, sem_2 vide
+    - HORS-ABIDJAN : correspondance_cal[Ordre] → 2 semaines
+        * Ordre 7 : semaine 13 répétée dans sem_1 et sem_2
+    """
+    ordre = int(row['Ordre']) if not pd.isna(row['Ordre']) else 0
+    if ordre == 0:
+        return ("", "", "", "")
+
+    if row['Region'] == 'ABIDJAN':
+        debut1, fin1 = lookup_semaines_cal.get(ordre, ("", ""))
+        return (debut1, fin1, "", "")
+    else:
+        paire = correspondance_cal.get(ordre)
+        if paire is None:
+            return ("", "", "", "")
+        sem1, sem2 = paire
+        debut1, fin1 = lookup_semaines_cal.get(sem1, ("", ""))
+        debut2, fin2 = lookup_semaines_cal.get(sem2, ("", ""))
+        return (debut1, fin1, debut2, fin2)
+
+# --- Copie de menage_final + déduplication via Code1 ---
+calendrier_menage = menage_final.copy()
+
+nb_avant = len(calendrier_menage)
+calendrier_menage = calendrier_menage.drop_duplicates(subset=['Code1'], keep='first')
+nb_apres = len(calendrier_menage)
+print(f"   ✓ Déduplication Code1 : {nb_avant} → {nb_apres} lignes ({nb_avant - nb_apres} doublons supprimés)")
+
+# --- Calcul des 4 variables de dates ---
+resultats = calendrier_menage.apply(get_dates_calendrier, axis=1)
+calendrier_menage['Date_debut_sem_1_ref'] = [r[0] for r in resultats]
+calendrier_menage['Date_fin_sem_1_ref']   = [r[1] for r in resultats]
+calendrier_menage['Date_debut_sem_2_ref'] = [r[2] for r in resultats]
+calendrier_menage['Date_fin_sem_2_ref']   = [r[3] for r in resultats]
+
+# --- Ordre des colonnes final ---
+colonnes_calendrier = [
+    'Region', 'sp', 'Cohorte', 'ord_sem', 'HH01', 'HH0', 'HH2A',
+    'HH1', 'HH2', 'HH3', 'HH4', 'HH6', 'HH8', 'HH8A', 'HH7', 'HH7B', 'HH8B',
+    'rghab', 'rgmen', 'V1MODINTR',
+    'trimestreencours', 'mois_en_cours', 'annee', 'Date1', 'Date2',
+    'Date_debut_sem_1_ref', 'Date_fin_sem_1_ref',
+    'Date_debut_sem_2_ref', 'Date_fin_sem_2_ref',
+    'Reference', 'Code1', '_responsible', '_quantity', 'Ordre', 'cle'
+]
+
+colonnes_presentes = [c for c in colonnes_calendrier if c in calendrier_menage.columns]
+calendrier_menage = calendrier_menage[colonnes_presentes]
+
+# --- Sauvegarde ---
+calendrier_menage.to_excel(DOSSIER_TRAVAIL_RESULTAT + "\\" + NOM_FICHIER_CALENDRIER_MENAGE, index=False)
+print(f"   ✓ {NOM_FICHIER_CALENDRIER_MENAGE} ({len(calendrier_menage)} lignes)")
+
+# Vérification rapide
+nb_sem1_ok = (calendrier_menage['Date_debut_sem_1_ref'] != "").sum()
+nb_sem2_ok = (calendrier_menage['Date_debut_sem_2_ref'] != "").sum()
+print(f"   ✓ Lignes avec sem_1 remplie : {nb_sem1_ok}")
+print(f"   ✓ Lignes avec sem_2 remplie : {nb_sem2_ok} (Abidjan et Ordre=7 : valeurs vides ou répétées)")
+
+# Échantillons de contrôle
+print(f"\n   📋 Contrôle HORS-ABIDJAN (7 premières lignes) :")
+ech = calendrier_menage[calendrier_menage['Region'] != 'ABIDJAN'][
+    ['Region', 'HH8', 'Ordre', 'Date_debut_sem_1_ref', 'Date_fin_sem_1_ref',
+     'Date_debut_sem_2_ref', 'Date_fin_sem_2_ref']
+].head(7)
+for _, r in ech.iterrows():
+    print(f"      {r['Region']} | ZD {r['HH8']} | Ordre {int(r['Ordre'])} | "
+          f"Sem1[{r['Date_debut_sem_1_ref']} → {r['Date_fin_sem_1_ref']}] | "
+          f"Sem2[{r['Date_debut_sem_2_ref']} → {r['Date_fin_sem_2_ref']}]")
+
+print(f"\n   📋 Contrôle ABIDJAN (5 premières lignes) :")
+ech = calendrier_menage[calendrier_menage['Region'] == 'ABIDJAN'][
+    ['HH8', 'Ordre', 'Date_debut_sem_1_ref', 'Date_fin_sem_1_ref',
+     'Date_debut_sem_2_ref', 'Date_fin_sem_2_ref']
+].head(5)
+for _, r in ech.iterrows():
+    print(f"      ZD {r['HH8']} | Ordre {int(r['Ordre'])} | "
+          f"Sem1[{r['Date_debut_sem_1_ref']} → {r['Date_fin_sem_1_ref']}] | "
+          f"Sem2['{r['Date_debut_sem_2_ref']}' → '{r['Date_fin_sem_2_ref']}'] (vide attendu)")
 
 # ============================================================================
 # RÉSUMÉ FINAL
 # ============================================================================
 
-print("\n" + "="*80)
+print("\n" + "=" * 80)
 print("✅ TRAITEMENT TERMINÉ AVEC SUCCÈS !")
-print("="*80)
+print("=" * 80)
 print(f"\n📊 RÉSUMÉ DE LA PRODUCTION")
-print(f"   • ZD traitées           : {len(df_echantillon)}")
-print(f"   • Affectations créées   : {len(df_resultat)}")
-print(f"   • Régions couvertes     : {df_resultat['Region'].nunique()}")
-print(f"   • Agents mobilisés      : {df_resultat['login'].nunique()}")
+print(f"   • ZD traitées         : {len(df_echantillon)}")
+print(f"   • Affectations créées : {len(df_resultat)}")
+print(f"   • Régions couvertes   : {df_resultat['Region'].nunique()}")
+print(f"   • Agents mobilisés    : {df_resultat['login'].nunique()}")
 
 print(f"\n📁 FICHIERS GÉNÉRÉS")
-print(f"\n   FICHIERS COMPLETS :")
-print(f"   • Dénombrement : {NOM_FICHIER_DENOMBREMENT} ({len(denombrement)} lignes)")
-print(f"   • Ménage       : {NOM_FICHIER_MENAGE} ({len(menage_final)} lignes)")
+print(f"   COMPLETS :")
+print(f"   • {NOM_FICHIER_DENOMBREMENT} ({len(denombrement)} lignes)")
+print(f"   • {NOM_FICHIER_MENAGE} ({len(menage_final)} lignes)")
+print(f"   • {NOM_FICHIER_CALENDRIER_MENAGE} ({len(calendrier_menage)} lignes)")
+print(f"   ABIDJAN :")
+print(f"   • {NOM_FICHIER_DENOMBREMENT_ABIDJAN} ({len(denombrement_abidjan)} lignes)")
+print(f"   • {NOM_FICHIER_MENAGE_ABIDJAN} ({len(menage_abidjan)} lignes)")
+print(f"   HORS-ABIDJAN :")
+print(f"   • {NOM_FICHIER_DENOMBREMENT_HORS_ABIDJAN} ({len(denombrement_hors_abidjan)} lignes)")
+print(f"   • {NOM_FICHIER_MENAGE_HORS_ABIDJAN} ({len(menage_non_abidjan_combine)} lignes)")
 
-print(f"\n   FICHIERS ABIDJAN :")
-print(f"   • Dénombrement ABIDJAN : {NOM_FICHIER_DENOMBREMENT_ABIDJAN} ({len(denombrement_abidjan)} lignes)")
-print(f"   • Ménage ABIDJAN       : {NOM_FICHIER_MENAGE_ABIDJAN} ({len(menage_abidjan)} lignes)")
-
-print(f"\n   FICHIERS HORS-ABIDJAN :")
-print(f"   • Dénombrement HORS-ABIDJAN : {NOM_FICHIER_DENOMBREMENT_HORS_ABIDJAN} ({len(denombrement_hors_abidjan)} lignes)")
-print(f"   • Ménage HORS-ABIDJAN       : {NOM_FICHIER_MENAGE_HORS_ABIDJAN} ({len(menage_non_abidjan_combine)} lignes)")
+print(f"\n📌 À RETENIR POUR L'ENVOI :")
+print(f"   ✓ menage.xlsx / _responsible contient déjà les comptes des agents")
+print(f"   ✓ menage.xlsx / Variables à envoyer : de ord_sem à _quantity")
+print(f"   ✓ menage.xlsx / Format d'export : Texte (séparateur : tabulation) (*.txt)")
+print(f"   ✓ denombrement.xlsx / _responsible contient déjà les comptes des agents")
+print(f"   ✓ denombrement.xlsx / Variables à envoyer : de ord_sem à _quantity")
+print(f"   ✓ denombrement.xlsx / Format d'export : Texte (séparateur : tabulation) (*.txt)")
 
 print(f"\n📂 Localisation : {DOSSIER_TRAVAIL_RESULTAT}")
-print("="*80)
+print("=" * 80)
