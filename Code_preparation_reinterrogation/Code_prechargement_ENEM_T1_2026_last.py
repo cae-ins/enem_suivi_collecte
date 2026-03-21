@@ -560,94 +560,120 @@ if 'DateJ7' in Menage.columns:
     
     # Initialiser les colonnes
     Menage['Semaine_ref'] = None
-    
-    # ÉTAPE 1 : Déterminer la semaine de référence pour chaque ménage
-    # (basé sur la cohorte d'origine et DateJ7)
-    nb_semaines_trouvees = 0
-    nb_semaines_non_trouvees = 0
-    
+
+    # ── ÉTAPE 1 : Déterminer la semaine de référence (Semaine_ref) ─────────────
+    # Lookup vectorisé : (cohorte_origine, DateJ7) → Numero_semaine
     print(f"\n   Étape 1 : Détermination des semaines de référence...")
-    
-    for idx, row in Menage.iterrows():
-        cohorte_origine = row['cohorte_origine']
-        datej7_menage = row['DateJ7']
-        
-        # Chercher la correspondance dans le fichier de référence
-        correspondance = df_semaine_ref[
-            (df_semaine_ref['Trimestre'] == cohorte_origine) &
-            (df_semaine_ref['DateJ7'] == datej7_menage)
-        ]
-        
-        if len(correspondance) > 0:
-            semaine_ref = correspondance.iloc[0]['Numero_semaine']
-            Menage.at[idx, 'Semaine_ref'] = semaine_ref
-            nb_semaines_trouvees += 1
-        else:
-            nb_semaines_non_trouvees += 1
-    
+    lookup_sem = df_semaine_ref.set_index(['Trimestre', 'DateJ7'])['Numero_semaine'].to_dict()
+    Menage['Semaine_ref'] = Menage.apply(
+        lambda r: lookup_sem.get((r['cohorte_origine'], r['DateJ7']), None), axis=1
+    )
+    nb_semaines_trouvees   = Menage['Semaine_ref'].notna().sum()
+    nb_semaines_non_trouvees = Menage['Semaine_ref'].isna().sum()
     print(f"   ✓ Semaines déterminées : {nb_semaines_trouvees} / {len(Menage)} ménages")
-    
     if nb_semaines_non_trouvees > 0:
         print(f"   ⚠️  ATTENTION : {nb_semaines_non_trouvees} ménages sans correspondance")
-    
-    # Afficher la répartition par semaine
+
+    # Répartition
     print(f"\n   Répartition des ménages par semaine :")
-    repartition_semaines = Menage['Semaine_ref'].value_counts().sort_index()
-    for semaine, nb in repartition_semaines.items():
+    for semaine, nb in Menage['Semaine_ref'].value_counts().sort_index().items():
         if pd.notna(semaine):
             print(f"      • {semaine} : {nb} ménages")
-    
-    # ÉTAPE 2 : Attribuer les dates Date1 et Date2 du TRIMESTRE ACTUEL
-    # (basé sur le trimestre de réinterrogation et la semaine de référence)
-    print(f"\n   Étape 2 : Attribution des dates du trimestre actuel ({TRIMESTRE_ACTUEL})...")
-    
+
+    # ── ÉTAPE 1b : Créer Ordre_de_passage ──────────────────────────────────────
+    # Extrait le numéro de la semaine depuis "Semaine N" (texte)
+    # Abidjan  : Ordre_de_passage = numéro de semaine (1 à 13)
+    # Hors-Abi : Ordre_de_passage = ceil(num / 2), sauf Semaine 13 → 7
+    #            Sem1→1, Sem2→1, Sem3→2, Sem4→2, ..., Sem12→6, Sem13→7
+    def _ordre_de_passage(row):
+        sem = row.get('Semaine_ref', None)
+        if pd.isna(sem) or sem is None:
+            return None
+        try:
+            num = int(str(sem).replace('Semaine', '').strip())
+        except (ValueError, AttributeError):
+            return None
+        region = row.get('HH2_label', '')
+        if str(region).strip().upper() == 'ABIDJAN':
+            return num           # Abidjan : Ordre = numéro semaine (1..13)
+        # Hors-Abidjan : 2 semaines par ordre, sauf Semaine 13
+        if num == 13:
+            return 7
+        return (num + 1) // 2    # ceil(num/2) : Sem1→1, Sem2→1, Sem3→2, ...
+
+    Menage['Ordre_de_passage'] = Menage.apply(_ordre_de_passage, axis=1)
+    print(f"\n   ✓ Variable Ordre_de_passage créée")
+    print(f"      Répartition : {Menage['Ordre_de_passage'].value_counts().sort_index().to_dict()}")
+
+    # ── ÉTAPE 2 : Attribuer Date1 et Date2 du TRIMESTRE ACTUEL ─────────────────
+    # Logique :
+    #   ABIDJAN       : Date1/Date2 de Semaine_ref directement (inchangé)
+    #   HORS-ABIDJAN  : dépend de Ordre_de_passage + Reference
+    #     Reference=1 → Semaine (Ordre-1)*2 + 1  (semaine impaire)
+    #     Reference=2 → Semaine (Ordre-1)*2 + 2  (semaine paire)
+    #     Exception Ordre=7 : Semaine 13 pour les deux (Semaine 14 n'existe pas)
+    print(f"\n   Étape 2 : Attribution des dates ({TRIMESTRE_ACTUEL})...")
+
+    # Lookup : (Trimestre, Numero_semaine) → (Date1, Date2)
+    lookup_dates = {
+        (r['Trimestre'], str(r['Numero_semaine']).strip()): (r['Date1'], r['Date2'])
+        for _, r in df_semaine_ref.iterrows()
+    }
+
+    def _fmt(val):
+        if val is None or (isinstance(val, float) and pd.isna(val)):
+            return None
+        if hasattr(val, 'strftime'):
+            return val.strftime('%Y-%m-%d')
+        s = str(val).strip().replace('/', '-')
+        return None if s in ('NaT', 'nan', 'None', '') else s
+
     Menage['Date1'] = None
     Menage['Date2'] = None
-    
-    nb_dates_mises_a_jour = 0
-    nb_dates_non_trouvees = 0
-    
+
     for idx, row in Menage.iterrows():
-        semaine_ref = row['Semaine_ref']
-        
-        if pd.notna(semaine_ref):
-            # Chercher les dates dans le fichier de référence pour le TRIMESTRE ACTUEL
-            correspondance_dates = df_semaine_ref[
-                (df_semaine_ref['Trimestre'] == TRIMESTRE_ACTUEL) &
-                (df_semaine_ref['Numero_semaine'] == semaine_ref)
-            ]
-            
-            if len(correspondance_dates) > 0:
-                date1_ref = correspondance_dates.iloc[0]['Date1']
-                date2_ref = correspondance_dates.iloc[0]['Date2']
-                
-                # 🔧 CONVERSION DU FORMAT : Remplacer "/" par "-"
-                # Convertir en string si ce n'est pas déjà le cas
-                if pd.notna(date1_ref):
-                    date1_ref_str = str(date1_ref).replace('/', '-')
-                    Menage.at[idx, 'Date1'] = date1_ref_str
-                
-                if pd.notna(date2_ref):
-                    date2_ref_str = str(date2_ref).replace('/', '-')
-                    Menage.at[idx, 'Date2'] = date2_ref_str
-                
-                nb_dates_mises_a_jour += 1
+        sem_ref  = row.get('Semaine_ref', None)
+        if pd.isna(sem_ref) or sem_ref is None:
+            continue
+        region   = str(row.get('HH2_label', '')).strip().upper()
+        ref      = row.get('Reference', 1)
+        ordre    = row.get('Ordre_de_passage', None)
+
+        if region == 'ABIDJAN':
+            # Abidjan : dates de Semaine_ref directement
+            key = (TRIMESTRE_ACTUEL, str(sem_ref).strip())
+        else:
+            # Hors-Abidjan : semaine selon Ordre_de_passage et Reference
+            if ordre is None or pd.isna(ordre):
+                continue
+            ordre = int(ordre)
+            ref   = int(ref) if pd.notna(ref) else 1
+            if ordre == 7:
+                num_sem = 13           # Ordre=7 : Semaine 13 pour Ref=1 et Ref=2
             else:
-                nb_dates_non_trouvees += 1
-    
-    print(f"   ✓ Dates mises à jour (Date1, Date2) : {nb_dates_mises_a_jour} ménages")
-    print(f"   ✓ Format converti : XX/XX/XXXX → XX-XX-XXXX")
-    
-    if nb_dates_non_trouvees > 0:
-        print(f"   ⚠️  ATTENTION : {nb_dates_non_trouvees} ménages sans dates")
-        print(f"      Vérifiez que le fichier Semaine_ref.xlsx contient bien toutes les semaines pour {TRIMESTRE_ACTUEL}")
-    
-    # Afficher un échantillon des dates mises à jour
-    print(f"\n   Échantillon des dates attribuées (2 premiers ménages) :")
-    echantillon = Menage[['interview__key', 'cohorte_origine', 'Semaine_ref', 'Date1', 'Date2']].head(2)
-    for idx, row in echantillon.iterrows():
+                num_sem = (ordre - 1) * 2 + ref   # Ref=1→impaire, Ref=2→paire
+            key = (TRIMESTRE_ACTUEL, f"Semaine {num_sem}")
+
+        d1, d2 = lookup_dates.get(key, (None, None))
+        Menage.at[idx, 'Date1'] = _fmt(d1)
+        Menage.at[idx, 'Date2'] = _fmt(d2)
+
+    nb_dates_ok  = Menage['Date1'].notna().sum()
+    nb_dates_ko  = Menage['Date1'].isna().sum()
+    print(f"   ✓ Dates mises à jour : {nb_dates_ok} ménages")
+    if nb_dates_ko > 0:
+        print(f"   ⚠️  {nb_dates_ko} ménages sans dates")
+        print(f"      Vérifiez Semaine_ref.xlsx pour le trimestre {TRIMESTRE_ACTUEL}")
+
+    # Échantillon
+    print(f"\n   Échantillon (2 premiers ménages) :")
+    for _, row in Menage[['interview__key','cohorte_origine','Semaine_ref',
+                           'Ordre_de_passage','Reference','Date1','Date2']].head(2).iterrows():
         if pd.notna(row['Semaine_ref']):
-            print(f"      {row['interview__key'][:15]}... | Cohorte: {row['cohorte_origine']} | {row['Semaine_ref']} | Dates {TRIMESTRE_ACTUEL}: {row['Date1']} → {row['Date2']}")
+            reg = row.get('HH2_label', '?') if 'HH2_label' in Menage.columns else '?'
+            print(f"      {str(row['interview__key'])[:15]}... | {row['Semaine_ref']} | "
+                  f"Ordre={row['Ordre_de_passage']} | Ref={row['Reference']} | "
+                  f"Date1={row['Date1']} Date2={row['Date2']}")
     
 else:
     print(f"⚠️  ATTENTION : Variable 'DateJ7' non trouvée dans les données ménage")
@@ -758,7 +784,7 @@ colonnes_menage = [
     'HH1_label', 'HH2_label', 'HH3_label', 'HH4_label', 'Semaine_ref',
     
     # Identifiants et métadonnées Survey Solutions 
-    'interview__id','Cohorte','ord_sem','HH01','HH0','HH2A','HH1','HH2','HH3','HH4','HH6','HH8',
+    'interview__id','Cohorte','Ordre_de_passage','ord_sem','HH01','HH0','HH2A','HH1','HH2','HH3','HH4','HH6','HH8',
     
     'HH8A','HH7','HH7B','HH8B',
     
