@@ -12,6 +12,141 @@ import tkinter as tk
 from tkinter import ttk, filedialog, messagebox, scrolledtext
 import threading
 import os
+import sys
+import subprocess
+import importlib
+
+# ==============================================================================
+# VÉRIFICATION ET INSTALLATION DES PACKAGES NÉCESSAIRES
+# ==============================================================================
+
+PACKAGES_REQUIS = {
+    "pandas":   "pandas",
+    "numpy":    "numpy",
+    "openpyxl": "openpyxl",
+}
+
+def verifier_packages():
+    """Vérifie si tous les packages sont installés. Retourne la liste des manquants."""
+    manquants = []
+    for nom_import, nom_pip in PACKAGES_REQUIS.items():
+        if importlib.util.find_spec(nom_import) is None:
+            manquants.append(nom_pip)
+    return manquants
+
+def installer_packages(packages, log_callback=None):
+    """Tente d'installer les packages via pip. Retourne True si succès."""
+    for pkg in packages:
+        msg = f"   Installation de {pkg}..."
+        if log_callback:
+            log_callback(msg)
+        else:
+            print(msg)
+        try:
+            subprocess.check_call(
+                [sys.executable, "-m", "pip", "install", pkg, "--quiet"],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+            )
+        except subprocess.CalledProcessError:
+            return False
+    return True
+
+def check_connexion_internet():
+    """Vérifie si une connexion internet est disponible."""
+    import socket
+    try:
+        socket.setdefaulttimeout(3)
+        socket.socket(socket.AF_INET, socket.SOCK_STREAM).connect(("8.8.8.8", 53))
+        return True
+    except Exception:
+        return False
+
+def gerer_packages_manquants(manquants):
+    """
+    Affiche une fenêtre d'avertissement si des packages manquent.
+    Propose d'installer automatiquement si internet disponible.
+    Retourne True si tout est OK pour continuer.
+    """
+    if not manquants:
+        return True
+
+    # Créer fenêtre temporaire pour afficher le message
+    root_tmp = tk.Tk()
+    root_tmp.withdraw()
+
+    if not check_connexion_internet():
+        messagebox.showerror(
+            "Packages manquants — Connexion requise",
+            f"Les packages Python suivants sont nécessaires mais non installés :\n\n"
+            f"  • {chr(10).join('  • ' + p for p in manquants)}\n\n"
+            f"⚠️  Aucune connexion Internet détectée.\n\n"
+            f"Pour installer ces packages :\n"
+            f"  1. Connectez-vous à Internet\n"
+            f"  2. Relancez l'application\n\n"
+            f"L'application va se fermer.",
+            parent=root_tmp
+        )
+        root_tmp.destroy()
+        sys.exit(1)
+    else:
+        reponse = messagebox.askyesno(
+            "Packages manquants",
+            f"Les packages suivants sont nécessaires mais non installés :\n\n"
+            f"  • {chr(10).join('  • ' + p for p in manquants)}\n\n"
+            f"Voulez-vous les installer maintenant ?\n"
+            f"(Connexion Internet disponible ✓)",
+            parent=root_tmp
+        )
+        root_tmp.destroy()
+
+        if not reponse:
+            sys.exit(0)
+
+        # Fenêtre de progression d'installation
+        win_install = tk.Tk()
+        win_install.title("Installation des packages")
+        win_install.geometry("420x160")
+        win_install.resizable(False, False)
+        tk.Label(win_install, text="Installation des packages en cours...",
+                 font=("Segoe UI", 10, "bold"), pady=15).pack()
+        lbl_pkg = tk.Label(win_install, text="", font=("Segoe UI", 9), fg="#1A3A5C")
+        lbl_pkg.pack()
+        bar = ttk.Progressbar(win_install, length=350, mode="indeterminate")
+        bar.pack(pady=10)
+        bar.start(10)
+
+        resultats = [None]
+
+        def _installer():
+            logs = []
+            ok = installer_packages(manquants, log_callback=lambda m: logs.append(m))
+            resultats[0] = ok
+            win_install.after(0, win_install.destroy)
+
+        threading.Thread(target=_installer, daemon=True).start()
+        win_install.mainloop()
+
+        if resultats[0]:
+            messagebox.showinfo("Installation réussie",
+                                "Tous les packages ont été installés.\n"
+                                "L'application va démarrer.")
+            return True
+        else:
+            messagebox.showerror("Échec installation",
+                                 "L'installation a échoué.\n"
+                                 "Vérifiez votre connexion et relancez l'application.")
+            sys.exit(1)
+
+# Vérification au démarrage
+_manquants = verifier_packages()
+if _manquants:
+    _root_check = tk.Tk()
+    _root_check.withdraw()
+    gerer_packages_manquants(_manquants)
+    _root_check.destroy()
+    # Réimporter après installation
+    importlib.invalidate_caches()
+
 import pandas as pd
 import numpy as np
 
@@ -41,6 +176,7 @@ def lancer_traitement(params, log_func, fin_func):
         FICHIER_ECHANTILLON     = params['FICHIER_ECHANTILLON']
         FEUILLE_ECHANTILLON     = params['FEUILLE_ECHANTILLON']
         FICHIER_GEOREF          = params['FICHIER_GEOREF']
+        FEUILLE_GEOREF          = params.get('FEUILLE_GEOREF', None)  # None = 1ère feuille
         FICHIER_EQUIPES         = params['FICHIER_EQUIPES']
         FEUILLE_EQUIPES         = params['FEUILLE_EQUIPES']
         FICHIER_SEMAINES_REF    = params['FICHIER_SEMAINES_REF']
@@ -73,7 +209,30 @@ def lancer_traitement(params, log_func, fin_func):
         df_echantillon = pd.read_excel(FICHIER_ECHANTILLON, sheet_name=FEUILLE_ECHANTILLON)
         df_echantillon = df_echantillon[df_echantillon["sous_echant"] == SOUS_ECHANTILLON]
 
-        df_georef      = pd.read_excel(FICHIER_GEOREF)
+        # Charger georef : si feuille spécifiée, l'utiliser ; sinon chercher
+        # automatiquement la feuille qui contient la colonne CLEZD
+        if FEUILLE_GEOREF:
+            df_georef = pd.read_excel(FICHIER_GEOREF, sheet_name=FEUILLE_GEOREF)
+            log_func(f"   ✓ Feuille georef       : '{FEUILLE_GEOREF}'")
+        else:
+            # Chercher automatiquement la feuille contenant CLEZD ou NomSp
+            import openpyxl
+            wb = openpyxl.load_workbook(FICHIER_GEOREF, read_only=True, data_only=True)
+            feuilles = wb.sheetnames
+            wb.close()
+            feuille_choisie = feuilles[0]  # défaut = première feuille
+            for f in feuilles:
+                try:
+                    df_test = pd.read_excel(FICHIER_GEOREF, sheet_name=f, nrows=1)
+                    if "CLEZD" in df_test.columns or "NomSp" in df_test.columns:
+                        feuille_choisie = f
+                        break
+                except Exception:
+                    continue
+            df_georef = pd.read_excel(FICHIER_GEOREF, sheet_name=feuille_choisie)
+            log_func(f"   ✓ Feuille georef auto  : '{feuille_choisie}' "
+                     f"(parmi {feuilles})")
+
         df_equipes     = pd.read_excel(FICHIER_EQUIPES, sheet_name=FEUILLE_EQUIPES)
         df_equipes     = df_equipes[df_equipes["Type de compte"] == "Agent de collecte"]
         df_semaines_ref= pd.read_excel(FICHIER_SEMAINES_REF, sheet_name=FEUILLE_SEMAINES_REF)
@@ -88,6 +247,34 @@ def lancer_traitement(params, log_func, fin_func):
 
         df_echantillon['NUM_ZD_Vf'] = df_echantillon['NUM_ZD_Vf'].astype(str).str.zfill(4)
         df_echantillon["CLEZD"]     = df_echantillon["NomSp"] + df_echantillon["NUM_ZD_Vf"]
+
+        # Créer CLEZD dans df_georef si elle n'existe pas déjà
+        # Le nouveau fichier georef (357 000+ lignes) utilise "NUM_ZdVf" (d minuscule)
+        # L'ancien fichier utilisait "NUM_ZD_Vf" ou avait déjà "CLEZD"
+        if "CLEZD" not in df_georef.columns:
+            df_georef = df_georef.copy()
+            # Détecter la colonne NUM_ZD selon la variante de nom présente
+            col_numzd = None
+            for candidat in ["NUM_ZD_Vf", "NUM_ZdVf", "NUM_ZD_NEW", "NumZD", "NumZD_1"]:
+                if candidat in df_georef.columns:
+                    col_numzd = candidat
+                    break
+            if "NomSp" in df_georef.columns and col_numzd:
+                df_georef[col_numzd] = df_georef[col_numzd].astype(str).str.zfill(4)
+                df_georef["CLEZD"]   = df_georef["NomSp"] + df_georef[col_numzd]
+                log_func(f"   ✓ Colonne CLEZD créée dans le géoréférencement "
+                         f"(NomSp + {col_numzd})")
+            else:
+                cols_georef = list(df_georef.columns)
+                log_func(f"   ⚠️  Colonnes disponibles dans georef : {cols_georef}")
+                raise KeyError(
+                    f"Impossible de créer CLEZD dans le fichier géoréférencement.\n"
+                    f"Colonnes disponibles : {cols_georef}\n"
+                    f"Colonnes attendues : 'NomSp' + une colonne de numéro ZD "
+                    f"(NUM_ZD_Vf, NUM_ZdVf, NUM_ZD_NEW, NumZD ou NumZD_1)."
+                )
+        else:
+            log_func("   ✓ Colonne CLEZD trouvée dans le géoréférencement")
 
         data_merged = pd.merge(df_echantillon, df_georef, on='CLEZD', how='left')
         cols_x = [c for c in data_merged.columns if c.endswith('_x')]
@@ -143,30 +330,68 @@ def lancer_traitement(params, log_func, fin_func):
         # ── DATES DE RÉFÉRENCE (Dénombrement & Ménage) ─────────────────────────
         log_func("\n📅 PRÉPARATION DES DATES DE RÉFÉRENCE...")
 
+        def _fmt_date(val):
+            """Formate une date en yyyy-mm-dd ou '' si invalide."""
+            if val is None or (isinstance(val, float) and np.isnan(val)):
+                return ""
+            if hasattr(val, 'strftime'):
+                return val.strftime('%Y-%m-%d')
+            s = str(val).strip()
+            return "" if s in ('NaT', 'nan', 'None', '') else s
+
         df_sem_trim = df_semaines_ref[df_semaines_ref['Trimestre'] == TRIMESTRE_COLLECTE_DATE].copy()
 
         if len(df_sem_trim) == 0:
             log_func(f"   ⚠️  ERREUR : Aucune ligne pour '{TRIMESTRE_COLLECTE_DATE}'")
             log_func(f"   ⚠️  Valeurs disponibles : {df_semaines_ref['Trimestre'].unique()}")
-            df_resultat['Date1_ref'] = ""
-            df_resultat['Date2_ref'] = ""
+            df_resultat['Date1_ref']  = ""
+            df_resultat['Date2_ref']  = ""
+            df_resultat['Date1_ref2'] = ""
+            df_resultat['Date2_ref2'] = ""
         else:
             log_func(f"   ✓ {len(df_sem_trim)} semaines trouvées pour {TRIMESTRE_COLLECTE}")
+
+            # Lookup 1 : N_semaine (entier) → (Date1, Date2) — ABIDJAN
             lookup_n = {
                 row['N_semaine']: (row['Date1'], row['Date2'])
                 for _, row in df_sem_trim.iterrows()
             }
-            df_resultat['Date1_ref'] = df_resultat['semaine_ref'].map(
-                lambda s: lookup_n.get(s, (None, None))[0])
-            df_resultat['Date2_ref'] = df_resultat['semaine_ref'].map(
-                lambda s: lookup_n.get(s, (None, None))[1])
+            # Lookup 2 : "Semaine N" (texte) → (Date1, Date2) — Hors-Abidjan
+            lookup_txt = {
+                str(row['Numero_semaine']).strip(): (row['Date1'], row['Date2'])
+                for _, row in df_sem_trim.iterrows()
+            }
 
-            for col in ['Date1_ref', 'Date2_ref']:
-                if pd.api.types.is_datetime64_any_dtype(df_resultat[col]):
-                    df_resultat[col] = df_resultat[col].dt.strftime('%Y-%m-%d')
-                df_resultat[col] = (
-                    df_resultat[col].fillna("").astype(str)
-                    .replace(['NaT', 'nan', 'None'], ""))
+            mask_abi  = df_resultat['NomReg'] == 'ABIDJAN'
+            mask_hors = ~mask_abi
+
+            # Abidjan : dates basées sur semaine_ref via N_semaine (inchangé)
+            df_resultat.loc[mask_abi, 'Date1_ref'] = df_resultat.loc[mask_abi, 'semaine_ref'].map(
+                lambda s: _fmt_date(lookup_n.get(s, (None, None))[0]))
+            df_resultat.loc[mask_abi, 'Date2_ref'] = df_resultat.loc[mask_abi, 'semaine_ref'].map(
+                lambda s: _fmt_date(lookup_n.get(s, (None, None))[1]))
+
+            # Hors-Abidjan Reference=1 : semaine impaire
+            # Formule : "Semaine " + str((Ordre-1)*2 + 1)
+            df_resultat.loc[mask_hors, 'Date1_ref'] = df_resultat.loc[mask_hors, 'Ordre'].map(
+                lambda o: _fmt_date(lookup_txt.get(f"Semaine {(int(o)-1)*2+1}", (None,None))[0]))
+            df_resultat.loc[mask_hors, 'Date2_ref'] = df_resultat.loc[mask_hors, 'Ordre'].map(
+                lambda o: _fmt_date(lookup_txt.get(f"Semaine {(int(o)-1)*2+1}", (None,None))[1]))
+
+            # Hors-Abidjan Reference=2 : semaine paire (Ordre=7 → Semaine 13 répétée)
+            # Formule : "Semaine " + str((Ordre-1)*2 + 2), sauf Ordre=7 → "Semaine 13"
+            df_resultat.loc[mask_hors, 'Date1_ref2'] = df_resultat.loc[mask_hors, 'Ordre'].map(
+                lambda o: _fmt_date(lookup_txt.get(
+                    "Semaine 13" if int(o)==7 else f"Semaine {(int(o)-1)*2+2}",
+                    (None,None))[0]))
+            df_resultat.loc[mask_hors, 'Date2_ref2'] = df_resultat.loc[mask_hors, 'Ordre'].map(
+                lambda o: _fmt_date(lookup_txt.get(
+                    "Semaine 13" if int(o)==7 else f"Semaine {(int(o)-1)*2+2}",
+                    (None,None))[1]))
+
+            # Abidjan n'a pas de Ref=2 → colonnes vides
+            df_resultat.loc[mask_abi, 'Date1_ref2'] = ""
+            df_resultat.loc[mask_abi, 'Date2_ref2'] = ""
 
             nb_ok = (df_resultat['Date1_ref'] != "").sum()
             log_func(f"   ✅ Dates trouvées : {nb_ok} / {len(df_resultat)} lignes")
@@ -253,6 +478,24 @@ def lancer_traitement(params, log_func, fin_func):
         men_ref1    = menage[menage['Region'] != 'ABIDJAN'].copy()
         men_ref2    = men_ref1.copy()
         men_ref2['Reference'] = 2
+
+        # ── Mise à jour dates pour Reference=2 (Hors-Abidjan) ─────────────────
+        # Ref=1 garde Date1/Date2 de la semaine impaire (déjà en place)
+        # Ref=2 prend Date1/Date2 de la semaine paire (Date1_ref2 / Date2_ref2)
+        if 'Date1_ref2' in df_resultat.columns:
+            mask_hors_res = df_resultat['NomReg'] != 'ABIDJAN'
+            lookup_ref2 = dict(zip(
+                df_resultat.loc[mask_hors_res, 'Code1'],
+                zip(df_resultat.loc[mask_hors_res, 'Date1_ref2'],
+                    df_resultat.loc[mask_hors_res, 'Date2_ref2'])
+            ))
+            men_ref2['Date1'] = men_ref2['Code1'].map(
+                lambda c: lookup_ref2.get(c, ("", ""))[0]
+            ).fillna("").astype(str).replace(['NaT','nan','None'], "")
+            men_ref2['Date2'] = men_ref2['Code1'].map(
+                lambda c: lookup_ref2.get(c, ("", ""))[1]
+            ).fillna("").astype(str).replace(['NaT','nan','None'], "")
+            log_func(f"   ✓ Dates Reference=2 mises à jour pour {len(men_ref2)} lignes Hors-Abidjan")
 
         cle_tri = men_ref1['Region'].astype(str)+"_"+men_ref1['sp'].astype(str)+"_"+men_ref1['HH8'].astype(str)
         men_ref1 = men_ref1.assign(cle_tri=cle_tri)
@@ -403,6 +646,7 @@ class App(tk.Tk):
         self.var_fichier_ech     = tk.StringVar()
         self.var_feuille_ech     = tk.StringVar(value="BASEGLO")
         self.var_fichier_georef  = tk.StringVar()
+        self.var_feuille_georef  = tk.StringVar(value="")  # vide = première feuille
         self.var_fichier_equipes = tk.StringVar()
         self.var_feuille_equipes = tk.StringVar(value="Equipe")
         self.var_fichier_sem_ref = tk.StringVar()
@@ -616,8 +860,10 @@ class App(tk.Tk):
 
         # Géoréférencement
         s2 = section("Fichier Géoréférencement  (FICHIER_GEOREF)")
-        row_fichier(s2, "FICHIER_GEOREF", self.var_fichier_georef, XL,
+        r2 = row_fichier(s2, "FICHIER_GEOREF", self.var_fichier_georef, XL,
                     "Base géo-référencée des ZD (ex: VF_BASE_ILOT_12012024_VF_work_Geovf.xlsx).", 0)
+        row_feuille(s2, "FEUILLE_GEOREF", self.var_feuille_georef, self.var_fichier_georef,
+                    "Laisser vide pour lire la 1ère feuille. Cliquez sur 🔄 pour lister les feuilles.", r2)
 
         # Équipes
         s3 = section("Fichier Équipes  (FICHIER_EQUIPES)")
@@ -918,6 +1164,7 @@ Le programme génère 7 fichiers Excel dans le dossier de sortie :
             'FICHIER_ECHANTILLON'    : self.var_fichier_ech.get().strip(),
             'FEUILLE_ECHANTILLON'    : self.var_feuille_ech.get().strip() or "BASEGLO",
             'FICHIER_GEOREF'         : self.var_fichier_georef.get().strip(),
+            'FEUILLE_GEOREF'         : self.var_feuille_georef.get().strip() or None,
             'FICHIER_EQUIPES'        : self.var_fichier_equipes.get().strip(),
             'FEUILLE_EQUIPES'        : self.var_feuille_equipes.get().strip() or "Equipe",
             'FICHIER_SEMAINES_REF'   : self.var_fichier_sem_ref.get().strip(),

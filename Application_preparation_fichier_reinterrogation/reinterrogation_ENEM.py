@@ -23,8 +23,116 @@ import tkinter as tk
 from tkinter import ttk, filedialog, messagebox, scrolledtext
 import os
 import re
+import sys
+import subprocess
+import importlib
+import importlib.util
 import threading
 from datetime import datetime
+
+# ==============================================================================
+# VÉRIFICATION ET INSTALLATION DES PACKAGES NÉCESSAIRES
+# ==============================================================================
+PACKAGES_REQUIS = {
+    "pandas":     "pandas",
+    "numpy":      "numpy",
+    "openpyxl":   "openpyxl",
+    "pyreadstat": "pyreadstat",
+}
+
+def _packages_manquants():
+    return [pip for mod, pip in PACKAGES_REQUIS.items()
+            if importlib.util.find_spec(mod) is None]
+
+def _connexion_internet():
+    import socket
+    try:
+        socket.setdefaulttimeout(3)
+        socket.socket(socket.AF_INET, socket.SOCK_STREAM).connect(("8.8.8.8", 53))
+        return True
+    except Exception:
+        return False
+
+def _verifier_packages_au_demarrage():
+    manquants = _packages_manquants()
+    if not manquants:
+        return
+
+    root_tmp = tk.Tk()
+    root_tmp.withdraw()
+
+    if not _connexion_internet():
+        liste = "\n".join("  - " + p for p in manquants)
+        messagebox.showerror(
+            "Packages manquants - Connexion requise",
+            "Les packages Python suivants sont necessaires mais non installes :\n\n"
+            + liste +
+            "\n\nAucune connexion Internet detectee.\n\n"
+            "Pour installer ces packages :\n"
+            "  1. Connectez-vous a Internet\n"
+            "  2. Relancez l'application\n\n"
+            "L'application va se fermer.",
+            parent=root_tmp
+        )
+        root_tmp.destroy()
+        sys.exit(1)
+
+    liste2 = "\n".join("  - " + p for p in manquants)
+    reponse = messagebox.askyesno(
+        "Packages manquants",
+        "Les packages suivants sont necessaires mais non installes :\n\n"
+        + liste2 +
+        "\n\nVoulez-vous les installer maintenant ?\n(Connexion Internet disponible)",
+        parent=root_tmp
+    )
+    root_tmp.destroy()
+    if not reponse:
+        sys.exit(0)
+
+    win = tk.Tk()
+    win.title("Installation des packages")
+    win.geometry("420x160")
+    win.resizable(False, False)
+    tk.Label(win, text="Installation des packages en cours...",
+             font=("Segoe UI", 10, "bold"), pady=15).pack()
+    lbl = tk.Label(win, text="", font=("Segoe UI", 9), fg="#1A3A5C")
+    lbl.pack()
+    bar = ttk.Progressbar(win, length=350, mode="indeterminate")
+    bar.pack(pady=10)
+    bar.start(10)
+    resultats = [False]
+
+    def _installer():
+        ok = True
+        for pkg in manquants:
+            win.after(0, lambda p=pkg: lbl.config(text="Installation de " + p + "..."))
+            try:
+                subprocess.check_call(
+                    [sys.executable, "-m", "pip", "install", pkg, "--quiet"],
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+                )
+            except subprocess.CalledProcessError:
+                ok = False
+                break
+        resultats[0] = ok
+        win.after(0, win.destroy)
+
+    threading.Thread(target=_installer, daemon=True).start()
+    win.mainloop()
+
+    if resultats[0]:
+        messagebox.showinfo("Installation reussie",
+                            "Tous les packages ont ete installes.\n"
+                            "L'application va demarrer.")
+        importlib.invalidate_caches()
+    else:
+        messagebox.showerror("Echec installation",
+                             "L'installation a echoue.\n"
+                             "Verifiez votre connexion et relancez l'application.")
+        sys.exit(1)
+
+_verifier_packages_au_demarrage()
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 #  CORRESPONDANCE TRIMESTRE → NOM FICHIER  (étendre ici si besoin après 2030)
@@ -286,30 +394,80 @@ def run_traitement(params: dict, log, progress):
 
     if 'DateJ7' in Menage.columns:
         Menage['V1DateJ7'] = Menage['DateJ7']
-        for idx, row in Menage.iterrows():
-            corresp = df_semaine_ref[
-                (df_semaine_ref['Trimestre'] == row['cohorte_origine']) &
-                (df_semaine_ref['DateJ7']    == row['DateJ7'])
-            ]
-            if len(corresp) > 0:
-                sem = corresp.iloc[0]['Numero_semaine']
-                Menage.at[idx, 'Semaine_ref'] = sem
-                dates = df_semaine_ref[
-                    (df_semaine_ref['Trimestre']      == TRIMESTRE_ACTUEL) &
-                    (df_semaine_ref['Numero_semaine'] == sem)
-                ]
-                if len(dates) > 0:
-                    d1 = dates.iloc[0]['Date1']
-                    d2 = dates.iloc[0]['Date2']
-                    if pd.notna(d1):
-                        Menage.at[idx, 'Date1'] = str(d1).replace('/', '-')
-                    if pd.notna(d2):
-                        Menage.at[idx, 'Date2'] = str(d2).replace('/', '-')
+
+        # ── Semaine_ref (lookup vectorisé) ────────────────────────────────────
+        lookup_sem = df_semaine_ref.set_index(['Trimestre', 'DateJ7'])['Numero_semaine'].to_dict()
+        Menage['Semaine_ref'] = Menage.apply(
+            lambda r: lookup_sem.get((r['cohorte_origine'], r['DateJ7']), None), axis=1
+        )
         n_sem = Menage['Semaine_ref'].notna().sum()
         log(f"   ✓ Semaines déterminées : {n_sem}/{len(Menage)} ménages")
+
+        # ── Ordre_de_passage ──────────────────────────────────────────────────
+        # Abidjan  : Ordre_de_passage = numéro de la semaine (1 à 13)
+        # Hors-Abi : ceil(num/2), sauf Sem13 → 7
+        #   Sem1→1, Sem2→1, Sem3→2, Sem4→2, ..., Sem12→6, Sem13→7
+        def _odp(row):
+            sem = row.get('Semaine_ref', None)
+            if pd.isna(sem) or sem is None:
+                return None
+            try:
+                num = int(str(sem).replace('Semaine', '').strip())
+            except (ValueError, AttributeError):
+                return None
+            region = str(row.get('HH2_label', '')).strip().upper()
+            if region == 'ABIDJAN':
+                return num
+            return 7 if num == 13 else (num + 1) // 2
+
+        Menage['Ordre_de_passage'] = Menage.apply(_odp, axis=1)
+        log(f"   ✓ Ordre_de_passage créé : {Menage['Ordre_de_passage'].value_counts().sort_index().to_dict()}")
+
+        # ── Date1 / Date2 ─────────────────────────────────────────────────────
+        # Lookup : (Trimestre, "Semaine N") → (Date1, Date2)
+        lookup_dates = {
+            (r['Trimestre'], str(r['Numero_semaine']).strip()): (r['Date1'], r['Date2'])
+            for _, r in df_semaine_ref.iterrows()
+        }
+
+        def _fmt(val):
+            if val is None or (isinstance(val, float) and pd.isna(val)):
+                return None
+            if hasattr(val, 'strftime'):
+                return val.strftime('%Y-%m-%d')
+            s = str(val).strip().replace('/', '-')
+            return None if s in ('NaT', 'nan', 'None', '') else s
+
+        for idx, row in Menage.iterrows():
+            sem_ref = row.get('Semaine_ref', None)
+            if pd.isna(sem_ref) or sem_ref is None:
+                continue
+            region = str(row.get('HH2_label', '')).strip().upper()
+            ref    = row.get('Reference', 1)
+            ordre  = row.get('Ordre_de_passage', None)
+
+            if region == 'ABIDJAN':
+                # Abidjan : dates de Semaine_ref directement
+                key = (TRIMESTRE_ACTUEL, str(sem_ref).strip())
+            else:
+                # Hors-Abidjan : semaine selon Ordre_de_passage et Reference
+                if ordre is None or pd.isna(ordre):
+                    continue
+                ordre = int(ordre)
+                ref   = int(ref) if pd.notna(ref) else 1
+                num_sem = 13 if ordre == 7 else (ordre - 1) * 2 + ref
+                key = (TRIMESTRE_ACTUEL, f"Semaine {num_sem}")
+
+            d1, d2 = lookup_dates.get(key, (None, None))
+            Menage.at[idx, 'Date1'] = _fmt(d1)
+            Menage.at[idx, 'Date2'] = _fmt(d2)
+
+        nb_ok = Menage['Date1'].notna().sum()
+        log(f"   ✓ Date1/Date2 mises à jour : {nb_ok}/{len(Menage)} ménages")
     else:
         log("   ⚠️  Variable 'DateJ7' absente — semaines non calculées")
-        Menage['V1DateJ7'] = None
+        Menage['V1DateJ7']         = None
+        Menage['Ordre_de_passage'] = None
     progress(60)
 
     # ── Variables ord_sem et HH01 ─────────────────────────────
@@ -341,7 +499,7 @@ def run_traitement(params: dict, log, progress):
     log("\n📋 Construction du fichier ménage final...")
     colonnes_menage = [
         'HH1_label','HH2_label','HH3_label','HH4_label','Semaine_ref',
-        'interview__id','Cohorte','ord_sem','HH01','HH0','HH2A',
+        'interview__id','Cohorte','Ordre_de_passage','ord_sem','HH01','HH0','HH2A',
         'HH1','HH2','HH3','HH4','HH6','HH8','HH8A','HH7','HH7B','HH8B',
         'rghab','rgmen',
         'V1MODINTR','trimestreencours','mois_en_cours','annee',
