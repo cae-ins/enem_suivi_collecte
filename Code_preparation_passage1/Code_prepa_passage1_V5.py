@@ -232,6 +232,15 @@ print(f"   🔍 Colonnes dans Semaine_ref.xlsx : {list(df_semaines_ref.columns)}
 
 df_semaines_trim = df_semaines_ref[df_semaines_ref['Trimestre'] == TRIMESTRE_COLLECTE_DATE].copy()
 
+def formater_date_ref(val):
+    """Convertit une valeur de date en chaîne yyyy-mm-dd, ou '' si invalide."""
+    if val is None or (isinstance(val, float) and np.isnan(val)):
+        return ""
+    if hasattr(val, 'strftime'):
+        return val.strftime('%Y-%m-%d')
+    s = str(val).strip()
+    return "" if s in ('NaT', 'nan', 'None', '') else s
+
 if len(df_semaines_trim) == 0:
     print(f"   ⚠️  ERREUR : Aucune ligne pour le trimestre '{TRIMESTRE_COLLECTE_DATE}'")
     print(f"   ⚠️  Valeurs disponibles : {df_semaines_ref['Trimestre'].unique()}")
@@ -240,27 +249,60 @@ if len(df_semaines_trim) == 0:
 else:
     print(f"   ✓ {len(df_semaines_trim)} semaines trouvées pour {TRIMESTRE_COLLECTE}")
 
-    # Lookup rapide : N_semaine → (Date1, Date2)
+    # ── Lookup 1 : N_semaine (entier) → (Date1, Date2) — pour ABIDJAN ────────
+    # Abidjan utilise semaine_ref (1..13) directement via N_semaine
     lookup_n_semaine = {
         row['N_semaine']: (row['Date1'], row['Date2'])
         for _, row in df_semaines_trim.iterrows()
     }
 
-    df_resultat['Date1_ref'] = df_resultat['semaine_ref'].map(
-        lambda s: lookup_n_semaine.get(s, (None, None))[0]
+    # ── Lookup 2 : "Semaine N" (texte) → (Date1, Date2) — pour Hors-Abidjan ─
+    # Hors-Abidjan utilise Numero_semaine ("Semaine 1", "Semaine 2"...)
+    lookup_num_semaine = {
+        str(row['Numero_semaine']).strip(): (row['Date1'], row['Date2'])
+        for _, row in df_semaines_trim.iterrows()
+    }
+
+    # ── Calcul des dates ABIDJAN (inchangé) ──────────────────────────────────
+    # Pour Abidjan : Date1 et Date2 viennent de la semaine_ref via N_semaine
+    mask_abi = df_resultat['NomReg'] == 'ABIDJAN'
+    df_resultat.loc[mask_abi, 'Date1_ref'] = df_resultat.loc[mask_abi, 'semaine_ref'].map(
+        lambda s: formater_date_ref(lookup_n_semaine.get(s, (None, None))[0])
     )
-    df_resultat['Date2_ref'] = df_resultat['semaine_ref'].map(
-        lambda s: lookup_n_semaine.get(s, (None, None))[1]
+    df_resultat.loc[mask_abi, 'Date2_ref'] = df_resultat.loc[mask_abi, 'semaine_ref'].map(
+        lambda s: formater_date_ref(lookup_n_semaine.get(s, (None, None))[1])
     )
 
-    # Formatage des dates
-    for col in ['Date1_ref', 'Date2_ref']:
-        if pd.api.types.is_datetime64_any_dtype(df_resultat[col]):
-            df_resultat[col] = df_resultat[col].dt.strftime('%Y-%m-%d')
-        df_resultat[col] = (
-            df_resultat[col].fillna("").astype(str)
-            .replace(['NaT', 'nan', 'None'], "")
-        )
+    # ── Calcul des dates Hors-Abidjan Reference=1 ────────────────────────────
+    # Reference=1 → semaine IMPAIRE : Ordre 1→Sem1, 2→Sem3, 3→Sem5 ... 7→Sem13
+    # Formule : Numero_semaine = (Ordre - 1) * 2 + 1
+    mask_hors = ~mask_abi
+    df_resultat.loc[mask_hors, 'sem_ref1_txt'] = df_resultat.loc[mask_hors, 'Ordre'].map(
+        lambda o: f"Semaine {(int(o) - 1) * 2 + 1}"
+    )
+    df_resultat.loc[mask_hors, 'Date1_ref'] = df_resultat.loc[mask_hors, 'sem_ref1_txt'].map(
+        lambda s: formater_date_ref(lookup_num_semaine.get(s, (None, None))[0])
+    )
+    df_resultat.loc[mask_hors, 'Date2_ref'] = df_resultat.loc[mask_hors, 'sem_ref1_txt'].map(
+        lambda s: formater_date_ref(lookup_num_semaine.get(s, (None, None))[1])
+    )
+
+    # ── Calcul des dates Hors-Abidjan Reference=2 ────────────────────────────
+    # Reference=2 → semaine PAIRE : Ordre 1→Sem2, 2→Sem4, 3→Sem6 ... 7→Sem13 (répétée)
+    # Formule : Numero_semaine = (Ordre - 1) * 2 + 2
+    # Exception Ordre=7 : Semaine 14 n'existe pas → Date1=Date2 = dates de Semaine 13
+    df_resultat.loc[mask_hors, 'sem_ref2_txt'] = df_resultat.loc[mask_hors, 'Ordre'].map(
+        lambda o: f"Semaine 13" if int(o) == 7 else f"Semaine {(int(o) - 1) * 2 + 2}"
+    )
+    df_resultat.loc[mask_hors, 'Date1_ref2'] = df_resultat.loc[mask_hors, 'sem_ref2_txt'].map(
+        lambda s: formater_date_ref(lookup_num_semaine.get(s, (None, None))[0])
+    )
+    df_resultat.loc[mask_hors, 'Date2_ref2'] = df_resultat.loc[mask_hors, 'sem_ref2_txt'].map(
+        lambda s: formater_date_ref(lookup_num_semaine.get(s, (None, None))[1])
+    )
+
+    # Nettoyage colonnes temporaires
+    df_resultat.drop(columns=['sem_ref1_txt', 'sem_ref2_txt'], inplace=True)
 
     nb_ok  = (df_resultat['Date1_ref'] != "").sum()
     nb_nok = (df_resultat['Date1_ref'] == "").sum()
@@ -357,6 +399,25 @@ menage_abidjan           = menage[menage['Region'] == 'ABIDJAN'].copy()
 menage_non_abidjan_ref1  = menage[menage['Region'] != 'ABIDJAN'].copy()
 menage_non_abidjan_ref2  = menage_non_abidjan_ref1.copy()
 menage_non_abidjan_ref2['Reference'] = 2
+
+# ── Mise à jour des dates pour Reference=2 (Hors-Abidjan) ────────────────────
+# Reference=1 garde Date1/Date2 de la semaine impaire (déjà en place)
+# Reference=2 doit avoir Date1/Date2 de la semaine paire suivante
+# Ces valeurs ont été calculées dans Date1_ref2 / Date2_ref2
+if 'Date1_ref2' in df_resultat.columns:
+    # Construire un lookup Code1 → (Date1_ref2, Date2_ref2) pour les Hors-Abidjan
+    mask_hors = df_resultat['NomReg'] != 'ABIDJAN'
+    lookup_ref2 = dict(zip(
+        df_resultat.loc[mask_hors, 'Code1'],
+        zip(df_resultat.loc[mask_hors, 'Date1_ref2'],
+            df_resultat.loc[mask_hors, 'Date2_ref2'])
+    ))
+    menage_non_abidjan_ref2['Date1'] = menage_non_abidjan_ref2['Code1'].map(
+        lambda c: lookup_ref2.get(c, (None, None))[0]
+    ).fillna("").astype(str).replace(['NaT', 'nan', 'None'], "")
+    menage_non_abidjan_ref2['Date2'] = menage_non_abidjan_ref2['Code1'].map(
+        lambda c: lookup_ref2.get(c, (None, None))[1]
+    ).fillna("").astype(str).replace(['NaT', 'nan', 'None'], "")
 
 # Tri pour regrouper les lignes Reference=1 et 2 par ZD
 cle_tri = (
